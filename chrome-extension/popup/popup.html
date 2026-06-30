@@ -3,80 +3,121 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>AI视频发布助手</title>
+  <title>AI Video Publisher</title>
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
   <div class="container">
-    <header>
-      <h1>🎬 AI视频发布助手</h1>
-    </header>
-    
-    <div class="section">
-      <h2>平台选择</h2>
-      <div class="platform-buttons">
+
+    <!-- 顶部状态栏 + 发布按钮 -->
+    <div class="topbar">
+      <div class="topbar-left">
+        <span class="status-dot" id="status-dot"></span>
+        <span class="status-text" id="status-text">检测中...</span>
+      </div>
+      <button id="publish-btn" class="publish-btn">发布</button>
+      <span class="version">v1.2.0</span>
+    </div>
+
+    <!-- 发布进度 -->
+    <div id="progress-section" class="section compact hidden">
+      <div class="progress-bar">
+        <div class="progress-fill" id="progress-fill"></div>
+      </div>
+      <div class="progress-step" id="progress-step">准备中...</div>
+      <div class="progress-detail" id="progress-detail"></div>
+    </div>
+
+    <!-- 平台选择 -->
+    <div class="section compact">
+      <div class="platform-row">
         <button id="douyin-btn" class="platform-btn">
-          <span class="icon">📱</span>
-          <span>抖音</span>
+          <span>♪</span> 抖音
         </button>
         <button id="weixin-btn" class="platform-btn">
-          <span class="icon">💬</span>
-          <span>视频号</span>
+          <span>◈</span> 视频号
         </button>
       </div>
     </div>
 
-    <div class="section">
-      <h2>视频目录</h2>
-      <div class="path-input">
-        <input type="text" id="video-path" placeholder="输入本地视频目录路径">
-        <button id="browse-btn">浏览</button>
+    <!-- 定时发布 -->
+    <div class="section compact">
+      <div class="row-between">
+        <label class="toggle-label">
+          <input type="checkbox" id="scheduled-publish">
+          <span class="toggle-switch"></span>
+          <span>定时发布</span>
+        </label>
+        <div id="schedule-time-wrap" class="inline-input hidden">
+          <input type="datetime-local" id="schedule-time">
+        </div>
       </div>
-      <p class="drag-hint">💡 拖动视频可调整发布顺序</p>
+      <div class="hint" id="schedule-hint">抖音：调用平台原生定时发布</div>
+    </div>
+
+    <!-- 智能生成 -->
+    <div class="section compact">
+      <div class="row-between">
+        <label class="toggle-label">
+          <input type="checkbox" id="auto-generate">
+          <span class="toggle-switch"></span>
+          <span>AI 生成文案和标签</span>
+        </label>
+      </div>
+      <div id="video-content-wrap" class="hidden">
+        <textarea id="video-content" placeholder="描述视频内容，AI 根据此内容生成话题标签（最多5个）和描述文案"></textarea>
+      </div>
+    </div>
+
+    <!-- 视频目录 -->
+    <div class="section compact">
+      <div class="path-row">
+        <input type="text" id="video-path" placeholder="视频目录路径 /Users/xxx/Videos">
+        <button id="browse-btn" class="path-btn">浏览</button>
+      </div>
       <div id="video-list" class="video-list"></div>
     </div>
 
-    <div class="section">
-      <h2>AI设置</h2>
-      <div class="setting-item">
-        <label>
-          <input type="checkbox" id="auto-topic" checked>
-          自动生成话题标签
-        </label>
+    <!-- AI 配置 -->
+    <div class="section compact collapsible" id="ai-section">
+      <div class="section-header" id="ai-toggle">
+        <span>AI 配置</span>
+        <span class="arrow" id="ai-arrow">▸</span>
       </div>
-      <div class="setting-item">
-        <label>
-          <input type="checkbox" id="auto-desc" checked>
-          自动生成视频描述
-        </label>
-      </div>
-      <div class="setting-item">
-        <label>
-          <input type="checkbox" id="scheduled-publish">
-          定时发布
-        </label>
-        <input type="datetime-local" id="schedule-time" class="time-input">
-        <p class="hint">开启后第一个视频在指定时间发布，后续视频依次延后40-88分钟</p>
-      </div>
-      <div class="setting-item">
-        <label for="custom-prompt">自定义提示词:</label>
-        <textarea id="custom-prompt" placeholder="可选：输入自定义提示词指导AI生成内容"></textarea>
+      <div class="section-body hidden" id="ai-body">
+        <div class="form-row">
+          <label>Provider</label>
+          <select id="ai-provider">
+            <option value="">-- 选择 --</option>
+            <option value="mimo">小米 MiMo (mimo-v2.5)</option>
+            <option value="openai">OpenAI GPT</option>
+            <option value="gemini">Google Gemini</option>
+            <option value="doubao">豆包 (字节)</option>
+            <option value="deepseek">DeepSeek</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label>API Key</label>
+          <input type="password" id="ai-key" placeholder="sk-...">
+        </div>
+        <div class="form-row">
+          <label>Model</label>
+          <input type="text" id="ai-model" placeholder="可选，留空用默认">
+        </div>
+        <button id="test-ai-btn" class="test-btn">测试连接</button>
+        <div id="test-result" class="test-result hidden"></div>
       </div>
     </div>
 
-    <div class="section">
-      <h2>发布队列</h2>
+    <!-- 发布队列 -->
+    <div class="section compact" id="queue-section">
+      <div class="section-header">
+        <span>发布队列</span>
+        <span class="queue-count" id="queue-count">0</span>
+      </div>
       <div id="publish-queue" class="publish-queue"></div>
     </div>
 
-    <div class="actions">
-      <button id="start-btn" class="primary-btn">开始发布</button>
-      <button id="stop-btn" class="danger-btn" disabled>停止</button>
-    </div>
-
-    <div id="status" class="status">
-      <span id="status-text">就绪</span>
-    </div>
   </div>
 
   <script src="popup.js"></script>

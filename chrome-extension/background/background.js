@@ -20,20 +20,37 @@ async function attachDebugger(tabId) {
   if (debuggerTargets.has(tabId)) {
     return true;
   }
-  
+
   try {
     await chrome.debugger.attach({ tabId }, '1.3');
-    await chrome.debugger.sendCommand({ tabId }, 'Fetch.enable', {
-      patterns: [
-        {
-          urlPattern: '*channels.weixin.qq.com*/post_create*',
-          requestStage: 'Request'
-        }
-      ]
-    });
+
+    if (publishState.platform === 'weixin') {
+      await chrome.debugger.sendCommand({ tabId }, 'Fetch.enable', {
+        patterns: [
+          {
+            urlPattern: '*channels.weixin.qq.com*/post_create*',
+            requestStage: 'Request'
+          }
+        ]
+      });
+    } else if (publishState.platform === 'douyin') {
+      await chrome.debugger.sendCommand({ tabId }, 'Fetch.enable', {
+        patterns: [
+          {
+            urlPattern: '*creator.douyin.com*/upload*',
+            requestStage: 'Request'
+          },
+          {
+            urlPattern: '*creator.douyin.com*/api*',
+            requestStage: 'Request'
+          }
+        ]
+      });
+    }
+
     debuggerTargets.set(tabId, true);
     publishState.debuggerAttached = true;
-    console.log('[Background] 调试器已附加，定时发布拦截已启用');
+    console.log('[Background] 调试器已附加，平台:', publishState.platform);
     return true;
   } catch (error) {
     console.error('[Background] 附加调试器失败:', error.message);
@@ -154,6 +171,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       console.log('[Background] 设置定时发布时间戳:', message.timestamp);
       sendResponse({ success: true });
       break;
+
+    case 'testAI':
+      testAIConnection(message.provider, message.apiKey, message.model)
+        .then(result => sendResponse(result))
+        .catch(error => sendResponse({ success: false, error: error.message }));
+      return true;
   }
   
   return true;
@@ -202,9 +225,12 @@ async function publishNextVideo() {
   }
   
   const video = publishState.videos[publishState.currentIndex];
-  console.log(`[Background] 准备发布第 ${publishState.currentIndex + 1}/${publishState.videos.length} 个视频: ${video.name}`);
-  
-  const platformUrl = publishState.platform === 'douyin' 
+  const idx = publishState.currentIndex + 1;
+  const total = publishState.videos.length;
+  console.log(`[Background] 准备发布第 ${idx}/${total} 个视频: ${video.name}`);
+  sendProgress(`准备: ${video.name}`, 'publishing', idx, total);
+
+  const platformUrl = publishState.platform === 'douyin'
     ? 'https://creator.douyin.com/creator-micro/content/publish'
     : 'https://channels.weixin.qq.com/platform/post/create';
   
@@ -216,18 +242,20 @@ async function publishNextVideo() {
   publishState.targetTabId = tab.id;
   console.log('[Background] 已打开标签页:', tab.id);
   
-  const needDebugger = publishState.platform === 'weixin' && 
-    (publishState.settings.scheduledPublish || publishState.videos.length > 1);
-  
+  const needDebugger = publishState.platform === 'douyin' || (publishState.platform === 'weixin' &&
+    (publishState.settings.scheduledPublish || publishState.videos.length > 1));
+
   if (needDebugger) {
-    console.log('[Background] 需要调试器，立即附加... 原因:', 
-      publishState.settings.scheduledPublish ? '定时发布' : '多视频发布');
+    console.log('[Background] 需要调试器，立即附加... 平台:',
+      publishState.platform, '原因:',
+      publishState.platform === 'douyin' ? '抖音上传需要调试器' : (publishState.settings.scheduledPublish ? '定时发布' : '多视频发布'));
     await attachDebugger(tab.id);
   }
 }
 
 async function finishAllPublish() {
   console.log('[Background] 所有视频发布完成，保存记录并打开历史页面');
+  sendProgress('全部完成', 'done', 1, 1, true);
   publishState.isPublishing = false;
   
   if (publishState.targetTabId) {
@@ -255,8 +283,8 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
     return;
   }
   
-  const needDebugger = publishState.platform === 'weixin' && 
-    (publishState.settings.scheduledPublish || publishState.videos.length > 1);
+  const needDebugger = publishState.platform === 'douyin' || (publishState.platform === 'weixin' &&
+    (publishState.settings.scheduledPublish || publishState.videos.length > 1));
   
   if (needDebugger && !publishState.debuggerAttached) {
     if (changeInfo.status === 'loading' || changeInfo.status === 'complete') {
@@ -287,7 +315,10 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
 
 async function handleVideoPublishDone() {
   const video = publishState.videos[publishState.currentIndex];
+  const idx = publishState.currentIndex + 1;
+  const total = publishState.videos.length;
   console.log(`[Background] 视频 ${video.name} 发布完成`);
+  sendProgress(`完成: ${video.name}`, 'done', idx, total);
   console.log('[Background] videoPath:', publishState.videoPath);
   
   const record = {
@@ -395,93 +426,131 @@ function handlePublishProgress(message) {
   console.log('[Background] 收到发布进度:', message.status);
 }
 
-async function generateAIContent(videoName, settings) {
-  console.log('[Background] 生成AI内容:', videoName);
-  
-  const prompt = settings.customPrompt || `你是短视频文案专家。根据视频文件名"${videoName}"生成发布内容。
+function sendProgress(step, detail, current, total, done) {
+  chrome.runtime.sendMessage({
+    action: 'progressUpdate',
+    step, detail, current, total, done: !!done,
+    videoIndex: publishState.currentIndex,
+    status: detail === 'done' ? 'done' : (detail === 'error' ? 'error' : 'publishing')
+  }).catch(() => {});
+}
 
-严格按以下格式返回，不要返回其他内容：
+function getAIProviderConfig(provider, apiKey, model, prompt) {
+  const configs = {
+    mimo: {
+      url: 'https://api.xiaomimimo.com/v1/chat/completions',
+      headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      body: { model: model || 'mimo-v2.5', messages: [{ role: 'user', content: prompt }], temperature: 0.7 },
+      extract: (data) => data.choices?.[0]?.message?.content || data.choices?.[0]?.message?.reasoning_content || ''
+    },
+    openai: {
+      url: 'https://api.openai.com/v1/chat/completions',
+      headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      body: { model: model || 'gpt-4o-mini', messages: [{ role: 'user', content: prompt }], temperature: 0.7 },
+      extract: (data) => data.choices?.[0]?.message?.content || ''
+    },
+    gemini: {
+      url: `https://generativelanguage.googleapis.com/v1beta/models/${model || 'gemini-2.0-flash'}:generateContent?key=${apiKey}`,
+      headers: { 'Content-Type': 'application/json' },
+      body: { contents: [{ parts: [{ text: prompt }] }] },
+      extract: (data) => data.candidates?.[0]?.content?.parts?.[0]?.text || ''
+    },
+    doubao: {
+      url: 'https://ark.cn-beijing.volces.com/api/v3/chat/completions',
+      headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      body: { model: model || 'doubao-seed-2-0-mini-260215', messages: [{ role: 'user', content: prompt }], temperature: 0.7 },
+      extract: (data) => data.choices?.[0]?.message?.content || ''
+    },
+    deepseek: {
+      url: 'https://api.deepseek.com/v1/chat/completions',
+      headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      body: { model: model || 'deepseek-chat', messages: [{ role: 'user', content: prompt }], temperature: 0.7 },
+      extract: (data) => data.choices?.[0]?.message?.content || ''
+    }
+  };
+  return configs[provider] || null;
+}
+
+async function callAIApi(provider, apiKey, model, prompt) {
+  const config = getAIProviderConfig(provider, apiKey, model, prompt);
+  if (!config) throw new Error(`未知的 AI Provider: ${provider}`);
+
+  console.log('[Background] 调用AI:', provider, config.url);
+  const response = await fetch(config.url, {
+    method: 'POST',
+    headers: config.headers,
+    body: JSON.stringify(config.body)
+  });
+
+  if (!response.ok) {
+    const errBody = await response.text().catch(() => '');
+    throw new Error(`HTTP ${response.status}: ${errBody.substring(0, 200)}`);
+  }
+
+  const data = await response.json();
+  console.log('[Background] AI响应:', JSON.stringify(data).substring(0, 300));
+
+  if (data.error) {
+    throw new Error(data.error.message || JSON.stringify(data.error));
+  }
+
+  return config.extract(data);
+}
+
+async function testAIConnection(provider, apiKey, model) {
+  try {
+    const prompt = '回复"OK"两个字即可。';
+    const reply = await callAIApi(provider, apiKey, model, prompt);
+    if (reply) {
+      return { success: true, reply: reply.trim() };
+    }
+    return { success: false, error: 'AI 返回为空' };
+  } catch (e) {
+    console.error('[Background] AI测试失败:', e);
+    return { success: false, error: e.message };
+  }
+}
+
+async function generateAIContent(videoName, settings) {
+  console.log('[Background] 生成AI内容, provider:', settings.aiProvider);
+
+  const videoDesc = settings.videoContent || videoName;
+  const prompt = `你是短视频文案专家。根据以下视频内容生成发布内容。
+
+视频内容：${videoDesc}
+
+严格按以下JSON格式返回，不要返回其他内容：
 {"description":"30字以内吸引人的文案","topics":["#话题1","#话题2","#话题3"]}
 
-示例：
-视频名：游戏.mp4
-返回：{"description":"这是什么神仙游戏？太上头了！","topics":["#游戏","#小游戏","#解压游戏"]}
-
-视频名：美食.mp4  
-返回：{"description":"这道菜太香了，做法超简单！","topics":["#美食","#家常菜","#美食分享"]}
-
-现在请为"${videoName}"生成内容：`;
+注意：topics 最多5个，每个以#开头。`;
 
   try {
-    const response = await fetch('https://ark.cn-beijing.volces.com/api/v3/responses', {
-      method: 'POST',
-      headers: {
-        'Authorization': 'Bearer 22931f77-d726-4071-93a0-e8d7e470e435',
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        model: 'doubao-seed-2-0-mini-260215',
-        input: [
-          {
-            role: 'user',
-            content: [
-              {
-                type: 'input_text',
-                text: prompt
-              }
-            ]
-          }
-        ]
-      })
-    });
+    const textContent = await callAIApi(settings.aiProvider, settings.aiKey, settings.aiModel, prompt);
 
-    const data = await response.json();
-    
-    if (data.error) {
-      throw new Error(data.error.message);
-    }
-
-    let textContent = '';
-    
-    if (data.output && Array.isArray(data.output)) {
-      const messageOutput = data.output.find(item => item.type === 'message');
-      if (messageOutput && messageOutput.content && Array.isArray(messageOutput.content)) {
-        const textItem = messageOutput.content.find(item => item.type === 'output_text');
-        if (textItem) {
-          textContent = textItem.text || '';
+    if (textContent) {
+      try {
+        const jsonMatch = textContent.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          const parsed = JSON.parse(jsonMatch[0]);
+          const topics = (parsed.topics || parsed.tags || []).slice(0, 5);
+          return {
+            topics: topics,
+            description: parsed.description || parsed.desc || ''
+          };
         }
+      } catch (e) {
+        console.error('[Background] JSON解析失败:', e);
       }
-    }
-    
-    if (!textContent && data.choices && data.choices[0]) {
-      textContent = data.choices[0].message?.content || '';
-    }
-    
-    try {
-      const jsonMatch = textContent.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        const parsed = JSON.parse(jsonMatch[0]);
-        
-        return {
-          topics: parsed.topics || parsed.话题标签 || parsed.tags || [],
-          description: parsed.description || parsed.描述 || parsed.desc || ''
-        };
-      }
-    } catch (e) {
-      console.error('[Background] 解析AI响应失败:', e);
+      return {
+        topics: extractTopics(textContent).slice(0, 5),
+        description: extractDescription(textContent)
+      };
     }
 
-    return {
-      topics: extractTopics(textContent),
-      description: extractDescription(textContent)
-    };
+    return { topics: [], description: '', error: 'AI返回为空' };
   } catch (error) {
-    console.error('[Background] AI生成错误:', error);
-    return {
-      topics: [],
-      description: '',
-      error: error.message
-    };
+    console.error('[Background] AI调用失败:', error);
+    return { topics: [], description: '', error: error.message };
   }
 }
 

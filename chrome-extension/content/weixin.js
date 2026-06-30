@@ -46,7 +46,7 @@ class WeixinPublisher {
    * 3. 整个文件名不含中文或包含数字：跳过
    */
   shouldUseAI(videoName, settings) {
-    if (!settings.autoTopic && !settings.autoDesc) {
+    if (!settings.autoGenerate) {
       console.log('[视频号发布助手] 未勾选AI生成文案，跳过AI识别');
       return false;
     }
@@ -246,12 +246,12 @@ class WeixinPublisher {
 
     let fullDescription = '';
     let topics = [];
-    
+
     if (useAI) {
-      if (settings.autoDesc && aiContent.description) {
+      if (aiContent.description) {
         fullDescription = aiContent.description;
       }
-      if (settings.autoTopic && aiContent.topics && aiContent.topics.length > 0) {
+      if (aiContent.topics && aiContent.topics.length > 0) {
         topics = aiContent.topics.slice(0, 5);
       } else {
         topics = this.defaultTopics;
@@ -416,29 +416,29 @@ class WeixinPublisher {
     dataTransfer.items.add(new File([file], video.name, { type: 'video/mp4' }));
     uploadInput.files = dataTransfer.files;
     uploadInput.dispatchEvent(new Event('change', { bubbles: true }));
-    
+
     let aiPromise = null;
     if (useAI) {
       aiPromise = this.generateAIContent(video.name, settings);
     }
-    
+
     await this.delay(12000);
-    
+
     let aiContent = { topics: [], description: '' };
     if (useAI && aiPromise) {
       try {
         aiContent = await aiPromise;
       } catch (e) {}
     }
-    
+
     let fullDescription = '';
     let topics = [];
-    
+
     if (useAI) {
-      if (settings.autoDesc && aiContent.description) {
+      if (aiContent.description) {
         fullDescription = aiContent.description;
       }
-      if (settings.autoTopic && aiContent.topics && aiContent.topics.length > 0) {
+      if (aiContent.topics && aiContent.topics.length > 0) {
         topics = aiContent.topics.slice(0, 5);
       } else {
         topics = this.defaultTopics;

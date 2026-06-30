@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "AI Video Publisher",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "description": "AI驱动的视频自动发布工具，支持抖音和视频号平台",
   "permissions": [
     "activeTab",
@@ -16,7 +16,13 @@
   "host_permissions": [
     "https://creator.douyin.com/*",
     "https://channels.weixin.qq.com/*",
-    "http://localhost:3000/*"
+    "http://localhost:3000/*",
+    "https://api.xiaomi.com/*",
+    "https://api.xiaomimimo.com/*",
+    "https://api.openai.com/*",
+    "https://generativelanguage.googleapis.com/*",
+    "https://ark.cn-beijing.volces.com/*",
+    "https://api.deepseek.com/*"
   ],
   "action": {
     "default_icon": {
