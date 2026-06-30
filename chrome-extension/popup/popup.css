@@ -42,6 +42,15 @@ body {
 .status-dot.off { background: #f44336; }
 .status-text { font-size: 11px; color: #666; }
 .version { font-size: 10px; color: #444; }
+.update-btn {
+  width: 18px; height: 18px; padding: 0;
+  background: none; border: 1px solid #333; border-radius: 4px;
+  color: #666; font-size: 11px; cursor: pointer; line-height: 1;
+  display: flex; align-items: center; justify-content: center;
+  transition: all 0.15s;
+}
+.update-btn:hover { border-color: #666; color: #ccc; }
+.update-btn.has-update { border-color: #4caf50; color: #4caf50; }
 
 .publish-btn {
   padding: 5px 20px;

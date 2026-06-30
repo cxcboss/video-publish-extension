@@ -43,6 +43,7 @@ class PopupController {
     });
 
     document.getElementById('test-ai-btn').addEventListener('click', () => this.testAI());
+    document.getElementById('update-btn').addEventListener('click', () => this.checkUpdate());
 
     const pathInput = document.getElementById('video-path');
     pathInput.addEventListener('input', (e) => {
@@ -441,6 +442,59 @@ class PopupController {
     } finally {
       btn.disabled = false;
       btn.textContent = '测试连接';
+    }
+  }
+
+  async checkUpdate() {
+    const btn = document.getElementById('update-btn');
+    const statusEl = document.getElementById('status-text');
+    btn.disabled = true;
+    btn.textContent = '...';
+    statusEl.textContent = '检查更新中...';
+
+    try {
+      // 第一步：检查是否有更新
+      const check = await fetch('http://localhost:3000/check-update');
+      const info = await check.json();
+
+      if (!info.success) {
+        btn.textContent = '!';
+        statusEl.textContent = info.error || '检查失败';
+        setTimeout(() => { btn.textContent = '↻'; }, 3000);
+        return;
+      }
+
+      if (!info.hasUpdate) {
+        btn.textContent = '✓';
+        statusEl.textContent = info.message;
+        setTimeout(() => { btn.textContent = '↻'; }, 2000);
+        return;
+      }
+
+      // 有更新，执行 git pull
+      statusEl.textContent = `发现更新: ${info.commitMessage || ''}，正在拉取...`;
+      const pull = await fetch('http://localhost:3000/update', { method: 'POST' });
+      const result = await pull.json();
+
+      if (result.success && result.updated) {
+        btn.classList.add('has-update');
+        btn.textContent = '✓';
+        statusEl.textContent = result.message;
+      } else if (result.success) {
+        btn.textContent = '✓';
+        statusEl.textContent = result.message;
+        setTimeout(() => { btn.textContent = '↻'; }, 2000);
+      } else {
+        btn.textContent = '!';
+        statusEl.textContent = result.error;
+        setTimeout(() => { btn.textContent = '↻'; }, 3000);
+      }
+    } catch (e) {
+      btn.textContent = '!';
+      statusEl.textContent = '服务未连接';
+      setTimeout(() => { btn.textContent = '↻'; }, 3000);
+    } finally {
+      btn.disabled = false;
     }
   }
 }

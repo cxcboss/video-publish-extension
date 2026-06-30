@@ -710,6 +710,67 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
+// 检查更新 - 用 GitHub API 对比远程最新提交
+app.get('/check-update', (req, res) => {
+  const { exec } = require('child_process');
+  const https = require('https');
+  const projectDir = path.join(__dirname, '..');
+
+  // 获取本地 HEAD
+  exec('git rev-parse HEAD', { cwd: projectDir }, (err, localHash) => {
+    if (err) return res.json({ success: false, error: '获取本地版本失败' });
+    localHash = localHash.trim();
+
+    // 查询 GitHub API 最新提交
+    https.get('https://api.github.com/repos/cxcboss/video-publish-extension/commits/main', {
+      headers: { 'User-Agent': 'video-publish-extension' }
+    }, (apiRes) => {
+      let data = '';
+      apiRes.on('data', chunk => data += chunk);
+      apiRes.on('end', () => {
+        try {
+          const commit = JSON.parse(data);
+          const remoteHash = commit.sha;
+          const hasUpdate = localHash !== remoteHash;
+          res.json({
+            success: true,
+            hasUpdate,
+            localHash: localHash.substring(0, 7),
+            remoteHash: remoteHash?.substring(0, 7),
+            message: hasUpdate ? '有新版本可用' : '已是最新版本',
+            commitMessage: hasUpdate ? commit.commit?.message?.split('\n')[0] : null,
+            commitDate: commit.commit?.committer?.date
+          });
+        } catch (e) {
+          res.json({ success: false, error: '解析更新信息失败' });
+        }
+      });
+    }).on('error', () => {
+      res.json({ success: false, error: '无法连接 GitHub' });
+    });
+  });
+});
+
+// 执行更新 - git pull
+app.post('/update', (req, res) => {
+  const { exec } = require('child_process');
+  const projectDir = path.join(__dirname, '..');
+
+  exec('git pull origin main', { cwd: projectDir, timeout: 30000 }, (err, stdout) => {
+    if (err) {
+      return res.json({ success: false, error: '更新失败: ' + err.message });
+    }
+    const output = stdout.trim();
+    const alreadyUp = output.includes('Already up to date') || output.includes('已经是最新的');
+    res.json({
+      success: true,
+      updated: !alreadyUp,
+      message: alreadyUp ? '已是最新版本' : '更新成功，请重启服务',
+      detail: output
+    });
+  });
+});
+
 app.listen(PORT, () => {
   console.log(`视频文件服务运行在 http://localhost:${PORT}`);
   console.log('支持的格式:', VIDEO_EXTENSIONS.join(', '));
