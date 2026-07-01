@@ -453,7 +453,6 @@ class PopupController {
     statusEl.textContent = '检查更新中...';
 
     try {
-      // 第一步：检查是否有更新
       const check = await fetch('http://localhost:3000/check-update');
       const info = await check.json();
 
@@ -466,29 +465,16 @@ class PopupController {
 
       if (!info.hasUpdate) {
         btn.textContent = '✓';
-        statusEl.textContent = info.message;
+        statusEl.textContent = `v${info.localVersion} 已是最新`;
         setTimeout(() => { btn.textContent = '↻'; }, 2000);
         return;
       }
 
-      // 有更新，执行 git pull
-      statusEl.textContent = `发现更新: ${info.commitMessage || ''}，正在拉取...`;
-      const pull = await fetch('http://localhost:3000/update', { method: 'POST' });
-      const result = await pull.json();
-
-      if (result.success && result.updated) {
-        btn.classList.add('has-update');
-        btn.textContent = '✓';
-        statusEl.textContent = result.message;
-      } else if (result.success) {
-        btn.textContent = '✓';
-        statusEl.textContent = result.message;
-        setTimeout(() => { btn.textContent = '↻'; }, 2000);
-      } else {
-        btn.textContent = '!';
-        statusEl.textContent = result.error;
-        setTimeout(() => { btn.textContent = '↻'; }, 3000);
-      }
+      // 有更新，显示更新日志弹窗
+      this.showUpdateModal(info);
+      btn.classList.add('has-update');
+      btn.textContent = '✓';
+      statusEl.textContent = `发现新版本 v${info.remoteVersion}`;
     } catch (e) {
       btn.textContent = '!';
       statusEl.textContent = '服务未连接';
@@ -496,6 +482,46 @@ class PopupController {
     } finally {
       btn.disabled = false;
     }
+  }
+
+  showUpdateModal(info) {
+    if (document.getElementById('update-mask')) return;
+    const mask = document.createElement('div');
+    mask.id = 'update-mask';
+    mask.className = 'dir-modal-mask';
+    const changelog = (info.changelog || '无更新说明')
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/\n/g, '<br>');
+
+    mask.innerHTML = `
+      <div class="dir-modal" style="max-height:70vh">
+        <div class="dir-modal-head">
+          <span>发现新版本 v${info.remoteVersion}</span>
+          <button id="update-close">✕</button>
+        </div>
+        <div style="padding:10px 14px;overflow-y:auto;max-height:40vh;font-size:12px;color:var(--text-2);line-height:1.6">
+          <div style="font-size:11px;color:var(--text-3);margin-bottom:8px">
+            当前版本: v${info.localVersion} → v${info.remoteVersion}
+            ${info.publishedAt ? ' | ' + new Date(info.publishedAt).toLocaleDateString('zh-CN') : ''}
+          </div>
+          <div style="background:var(--bg-input);padding:8px 10px;border-radius:6px;border:1px solid var(--border)">
+            ${changelog}
+          </div>
+        </div>
+        <div class="dir-modal-foot" style="gap:8px">
+          <button id="update-later" style="background:var(--bg-input);color:var(--text-2)">稍后</button>
+          <button id="update-download" style="background:var(--accent);color:var(--accent-text)">下载更新</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(mask);
+    mask.querySelector('#update-close').onclick = () => mask.remove();
+    mask.querySelector('#update-later').onclick = () => mask.remove();
+    mask.onclick = (e) => { if (e.target === mask) mask.remove(); };
+    mask.querySelector('#update-download').onclick = () => {
+      window.open(info.releaseUrl || 'https://github.com/cxcboss/video-publish-extension/releases', '_blank');
+      mask.remove();
+    };
   }
 }
 

@@ -710,46 +710,92 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-// 检查更新 - 用 GitHub API 对比远程最新提交
+// 检查更新 - 用 GitHub Releases API
 app.get('/check-update', (req, res) => {
   const { exec } = require('child_process');
   const https = require('https');
   const projectDir = path.join(__dirname, '..');
 
-  // 获取本地 HEAD
-  exec('git rev-parse HEAD', { cwd: projectDir }, (err, localHash) => {
-    if (err) return res.json({ success: false, error: '获取本地版本失败' });
-    localHash = localHash.trim();
+  // 获取本地版本
+  let localVersion = '0.0.0';
+  try {
+    const manifest = JSON.parse(fs.readFileSync(path.join(projectDir, 'chrome-extension', 'manifest.json'), 'utf8'));
+    localVersion = manifest.version || '0.0.0';
+  } catch (_) {}
 
-    // 查询 GitHub API 最新提交
-    https.get('https://api.github.com/repos/cxcboss/video-publish-extension/commits/main', {
-      headers: { 'User-Agent': 'video-publish-extension' }
-    }, (apiRes) => {
-      let data = '';
-      apiRes.on('data', chunk => data += chunk);
-      apiRes.on('end', () => {
-        try {
-          const commit = JSON.parse(data);
-          const remoteHash = commit.sha;
-          const hasUpdate = localHash !== remoteHash;
+  // 查询 GitHub 最新 Release
+  https.get('https://api.github.com/repos/cxcboss/video-publish-extension/releases/latest', {
+    headers: { 'User-Agent': 'video-publish-extension' }
+  }, (apiRes) => {
+    let data = '';
+    apiRes.on('data', chunk => data += chunk);
+    apiRes.on('end', () => {
+      try {
+        const release = JSON.parse(data);
+        if (release.tag_name) {
+          const remoteVersion = release.tag_name.replace(/^v/, '');
+          const hasUpdate = compareVersions(remoteVersion, localVersion) > 0;
           res.json({
             success: true,
             hasUpdate,
-            localHash: localHash.substring(0, 7),
-            remoteHash: remoteHash?.substring(0, 7),
-            message: hasUpdate ? '有新版本可用' : '已是最新版本',
-            commitMessage: hasUpdate ? commit.commit?.message?.split('\n')[0] : null,
-            commitDate: commit.commit?.committer?.date
+            localVersion,
+            remoteVersion,
+            message: hasUpdate ? `新版本 v${remoteVersion} 可用` : '已是最新版本',
+            changelog: hasUpdate ? release.body || '无更新说明' : null,
+            downloadUrl: release.zipball_url,
+            releaseUrl: release.html_url,
+            publishedAt: release.published_at
           });
-        } catch (e) {
-          res.json({ success: false, error: '解析更新信息失败' });
+        } else {
+          // 没有 release，回退到 commit 检查
+          fallbackCommitCheck(localVersion, res);
         }
-      });
-    }).on('error', () => {
-      res.json({ success: false, error: '无法连接 GitHub' });
+      } catch (e) {
+        fallbackCommitCheck(localVersion, res);
+      }
     });
+  }).on('error', () => {
+    res.json({ success: false, error: '无法连接 GitHub' });
   });
 });
+
+function fallbackCommitCheck(localVersion, res) {
+  const https = require('https');
+  https.get('https://api.github.com/repos/cxcboss/video-publish-extension/commits/main', {
+    headers: { 'User-Agent': 'video-publish-extension' }
+  }, (apiRes) => {
+    let data = '';
+    apiRes.on('data', chunk => data += chunk);
+    apiRes.on('end', () => {
+      try {
+        const commit = JSON.parse(data);
+        res.json({
+          success: true,
+          hasUpdate: false,
+          localVersion,
+          remoteVersion: localVersion,
+          message: '已是最新版本（基于提交检查）',
+          changelog: null,
+          releaseUrl: 'https://github.com/cxcboss/video-publish-extension/releases'
+        });
+      } catch (e) {
+        res.json({ success: false, error: '解析更新信息失败' });
+      }
+    });
+  }).on('error', () => {
+    res.json({ success: false, error: '无法连接 GitHub' });
+  });
+}
+
+function compareVersions(a, b) {
+  const pa = a.split('.').map(Number);
+  const pb = b.split('.').map(Number);
+  for (let i = 0; i < 3; i++) {
+    if ((pa[i] || 0) > (pb[i] || 0)) return 1;
+    if ((pa[i] || 0) < (pb[i] || 0)) return -1;
+  }
+  return 0;
+}
 
 // 执行更新 - git pull
 app.post('/update', (req, res) => {
