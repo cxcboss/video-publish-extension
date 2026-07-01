@@ -23,7 +23,7 @@ class PopupController {
   bindEvents() {
     document.getElementById('douyin-btn').addEventListener('click', () => this.selectPlatform('douyin'));
     document.getElementById('weixin-btn').addEventListener('click', () => this.selectPlatform('weixin'));
-    document.getElementById('browse-btn').addEventListener('click', () => this.showDirBrowser());
+    document.getElementById('browse-btn').addEventListener('click', () => this.browseFolder());
     document.getElementById('publish-btn').addEventListener('click', () => this.togglePublish());
 
     document.getElementById('scheduled-publish').addEventListener('change', (e) => {
@@ -169,6 +169,101 @@ class PopupController {
     this.selectedVideos = [];
     this.renderQueue();
   }
+
+  // ===== 浏览文件夹 =====
+  async browseFolder() {
+    if (window.showDirectoryPicker) {
+      try {
+        const dirHandle = await window.showDirectoryPicker({ mode: 'read' });
+        const dirName = dirHandle.name;
+        const videos = [];
+        for await (const entry of dirHandle.values()) {
+          if (entry.kind === 'file') {
+            const ext = entry.name.split('.').pop().toLowerCase();
+            if (['mp4', 'mov', 'avi', 'mkv', 'flv', 'wmv', 'webm'].includes(ext)) {
+              const file = await entry.getFile();
+              videos.push({ name: entry.name, size: file.size, path: '' });
+            }
+          }
+        }
+        if (videos.length > 0) {
+          this.videos = videos;
+          this.selectedVideos = [...videos];
+          this.videoPath = dirName;
+          document.getElementById('video-path').value = dirName;
+          this.renderVideoList(videos);
+          this.renderQueue();
+          this.updateStatus(`已加载 ${videos.length} 个视频`);
+        } else {
+          this.updateStatus('该目录下没有视频文件');
+        }
+        return;
+      } catch (e) {
+        if (e.name === 'AbortError') return;
+      }
+    }
+    this.showDirBrowser();
+  }
+
+  showDirBrowser() {
+    if (document.getElementById('dir-mask')) return;
+    const cur = document.getElementById('video-path').value.trim() || '';
+    const mask = document.createElement('div');
+    mask.id = 'dir-mask';
+    mask.className = 'dir-modal-mask';
+    mask.innerHTML = `
+      <div class="dir-modal">
+        <div class="dir-modal-head">
+          <span>选择目录</span>
+          <button id="dir-close">✕</button>
+        </div>
+        <div class="dir-modal-path" id="dir-path"></div>
+        <div class="dir-modal-list" id="dir-list"></div>
+        <div class="dir-modal-foot">
+          <button id="dir-ok">选择此目录</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(mask);
+    mask.querySelector('#dir-close').onclick = () => mask.remove();
+    mask.onclick = (e) => { if (e.target === mask) mask.remove(); };
+    mask.querySelector('#dir-ok').onclick = () => {
+      const p = mask.dataset.path || '';
+      if (p) {
+        document.getElementById('video-path').value = p;
+        this.videoPath = p;
+        this.loadVideos(p);
+      }
+      mask.remove();
+    };
+    this.loadDir(mask, cur || '/');
+  }
+
+  async loadDir(mask, dir) {
+    const list = mask.querySelector('#dir-list');
+    const pathEl = mask.querySelector('#dir-path');
+    pathEl.textContent = dir;
+    mask.dataset.path = dir;
+    list.innerHTML = '<div style="padding:16px;text-align:center;color:var(--text-3)">加载中...</div>';
+    try {
+      const r = await fetch(`http://localhost:3000/api/directories?path=${encodeURIComponent(dir)}`);
+      const d = await r.json();
+      const dirs = d.directories || [];
+      let html = '';
+      if (dir !== '/') {
+        const parent = dir.split('/').slice(0, -1).join('/') || '/';
+        html += `<div class="dir-item up" data-path="${parent}"><span class="arrow">▴</span>返回上级</div>`;
+      }
+      html += dirs.map(dd => `
+        <div class="dir-item" data-path="${dd.path}"><span class="arrow">▸</span>${dd.name}</div>
+      `).join('');
+      list.innerHTML = html || '<div style="padding:16px;text-align:center;color:var(--text-3)">无子目录</div>';
+      list.querySelectorAll('.dir-item').forEach(el => {
+        el.addEventListener('click', () => this.loadDir(mask, el.dataset.path));
+      });
+    } catch (_) {
+      list.innerHTML = '<div style="padding:16px;text-align:center;color:var(--dot-off)">加载失败</div>';
+    }
 
   renderVideoList(videos) {
     const c = document.getElementById('video-list');
