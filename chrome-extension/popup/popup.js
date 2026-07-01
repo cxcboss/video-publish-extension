@@ -264,6 +264,7 @@ class PopupController {
     } catch (_) {
       list.innerHTML = '<div style="padding:16px;text-align:center;color:var(--dot-off)">加载失败</div>';
     }
+  }
 
   renderVideoList(videos) {
     const c = document.getElementById('video-list');
