@@ -177,6 +177,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         .then(result => sendResponse(result))
         .catch(error => sendResponse({ success: false, error: error.message }));
       return true;
+
+    case 'douyinPublishDone':
+      handleDouyinPublishDone(message).catch(() => {});
+      sendResponse({ success: true });
+      break;
   }
   
   return true;
@@ -313,6 +318,46 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   }
 });
 
+async function handleDouyinPublishDone(message) {
+  const video = publishState.videos[publishState.currentIndex];
+  const idx = publishState.currentIndex + 1;
+  const total = publishState.videos.length;
+  console.log(`[Background] 抖音视频 ${message.videoName} 发布完成`);
+  sendProgress(`完成: ${message.videoName}`, 'done', idx, total);
+
+  const record = {
+    videoName: message.videoName,
+    videoPath: message.videoPath || publishState.videoPath || '',
+    platform: 'douyin',
+    publishTime: new Date().toISOString(),
+    scheduled: message.scheduled || false,
+    scheduledTime: publishState.scheduledTime
+  };
+  publishState.publishRecords.push(record);
+
+  const oldTabId = publishState.targetTabId;
+  if (oldTabId) {
+    detachDebugger(oldTabId);
+  }
+
+  publishState.currentIndex++;
+  publishState.debuggerAttached = false;
+  publishState.commandSent = false;
+
+  if (publishState.currentIndex < publishState.videos.length) {
+    if (oldTabId) {
+      chrome.tabs.remove(oldTabId).catch(() => {});
+      console.log('[Background] 已关闭上一个发布标签页');
+    }
+    publishState.targetTabId = null;
+    console.log('[Background] 等待3秒后发布下一个视频...');
+    setTimeout(() => { publishNextVideo(); }, 3000);
+  } else {
+    publishState.targetTabId = oldTabId;
+    await finishAllPublish();
+  }
+}
+
 async function handleVideoPublishDone() {
   const video = publishState.videos[publishState.currentIndex];
   const idx = publishState.currentIndex + 1;
@@ -331,7 +376,6 @@ async function handleVideoPublishDone() {
   };
   
   console.log('[Background] 发布记录:', JSON.stringify(record));
-  
   publishState.publishRecords.push(record);
   
   const oldTabId = publishState.targetTabId;
@@ -340,7 +384,6 @@ async function handleVideoPublishDone() {
     detachDebugger(oldTabId);
   }
   
-  publishState.targetTabId = null;
   publishState.currentIndex++;
   publishState.debuggerAttached = false;
   publishState.commandSent = false;
@@ -348,13 +391,13 @@ async function handleVideoPublishDone() {
   if (publishState.currentIndex < publishState.videos.length) {
     if (oldTabId) {
       chrome.tabs.remove(oldTabId).catch(() => {});
+      console.log('[Background] 已关闭上一个发布标签页');
     }
-    
+    publishState.targetTabId = null;
     console.log('[Background] 等待3秒后发布下一个视频...');
-    setTimeout(() => {
-      publishNextVideo();
-    }, 3000);
+    setTimeout(() => { publishNextVideo(); }, 3000);
   } else {
+    publishState.targetTabId = oldTabId;
     await finishAllPublish();
   }
 }
@@ -369,7 +412,7 @@ async function sendPublishCommand(tabId) {
   let bestTarget = null;
   let maxElements = 0;
   
-  for (let attempt = 0; attempt < 30; attempt++) {
+  for (let attempt = 0; attempt < 15; attempt++) {
     if (!publishState.isPublishing) {
       console.log('[Background] 发布已取消');
       return;

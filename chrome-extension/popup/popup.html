@@ -16,7 +16,7 @@
         <span class="status-text" id="status-text">检测中...</span>
       </div>
       <button id="publish-btn" class="publish-btn">发布</button>
-      <span class="version" id="version-text">v1.7.0</span>
+      <span class="version" id="version-text">v1.8.0</span>
       <button id="update-btn" class="update-btn" title="检查更新">↻</button>
     </div>
 
@@ -56,37 +56,19 @@
       <div class="hint" id="schedule-hint">抖音：调用平台原生定时发布</div>
     </div>
 
-    <!-- 智能生成 -->
+    <!-- AI 生成（含 AI 配置折叠区） -->
     <div class="section compact">
-      <div class="row-between">
-        <label class="toggle-label">
+      <div class="row-between clickable" id="auto-generate-row">
+        <label class="toggle-label" onclick="event.stopPropagation()">
           <input type="checkbox" id="auto-generate">
           <span class="toggle-switch"></span>
           <span>AI 生成文案和标签</span>
         </label>
+        <span class="arrow" id="ai-arrow" title="AI 配置">▸</span>
       </div>
-      <div id="video-content-wrap" class="hidden">
-        <textarea id="video-content" placeholder="描述视频内容，AI 根据此内容生成话题标签（最多5个）和描述文案"></textarea>
-      </div>
-    </div>
-
-    <!-- 视频目录 -->
-    <div class="section compact">
-      <div class="path-row">
-        <input type="text" id="video-path" placeholder="视频目录路径 /Users/xxx/Videos">
-        <button id="browse-btn" class="path-btn">浏览</button>
-      </div>
-      <div id="video-list" class="video-list"></div>
-    </div>
-
-    <!-- AI 配置 -->
-    <div class="section compact collapsible" id="ai-section">
-      <div class="section-header" id="ai-toggle">
-        <span>AI 配置</span>
-        <span class="arrow" id="ai-arrow">▸</span>
-      </div>
-      <div class="section-body hidden" id="ai-body">
-        <div class="form-row">
+      <!-- AI 配置：点击箭头展开 -->
+      <div id="ai-config-wrap" class="hidden">
+        <div class="form-row" style="margin-top:8px">
           <label>Provider</label>
           <select id="ai-provider">
             <option value="">-- 选择 --</option>
@@ -108,6 +90,20 @@
         <button id="test-ai-btn" class="test-btn">测试连接</button>
         <div id="test-result" class="test-result hidden"></div>
       </div>
+      <!-- 视频内容描述 -->
+      <div id="video-content-wrap" class="hidden">
+        <textarea id="video-content" placeholder="描述视频内容，AI 根据此内容生成话题标签（最多5个）和描述文案"></textarea>
+      </div>
+    </div>
+
+    <!-- 视频目录 -->
+    <div class="section compact">
+      <div class="path-row">
+        <input type="text" id="video-path" placeholder="视频目录路径 /Users/xxx/Videos">
+        <button id="refresh-btn" class="path-btn refresh" title="刷新列表">↻</button>
+        <button id="browse-btn" class="path-btn">浏览</button>
+      </div>
+      <div id="video-list" class="video-list"></div>
     </div>
 
     <!-- 发布队列 -->
@@ -117,6 +113,12 @@
         <span class="queue-count" id="queue-count">0</span>
       </div>
       <div id="publish-queue" class="publish-queue"></div>
+    </div>
+
+    <!-- 服务启动提示（未连接时显示） -->
+    <div id="server-hint" class="server-hint hidden">
+      <div class="server-hint-title">本地服务未启动</div>
+      <code id="server-cmd">cd local-server && node server.js</code>
     </div>
 
   </div>

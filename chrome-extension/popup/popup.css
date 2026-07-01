@@ -242,6 +242,12 @@ body {
   font-size: 11px; font-weight: 600;
 }
 .path-btn:hover { opacity: 0.85; }
+.path-btn.refresh {
+  background: var(--bg-input); color: var(--text-2);
+  border: 1px solid var(--border); padding: 6px 8px;
+  font-size: 13px; min-width: 28px;
+}
+.path-btn.refresh:hover { border-color: var(--text-3); color: var(--text); }
 
 /* 视频列表 */
 .video-list {
@@ -320,6 +326,54 @@ body {
 @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
 
 .hidden { display: none !important; }
+
+/* 服务启动提示 */
+.server-hint {
+  margin-top: 4px;
+  padding: 10px 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  text-align: center;
+}
+.server-hint-title {
+  font-size: 11px;
+  color: var(--text-2);
+  margin-bottom: 6px;
+}
+.server-hint code {
+  display: block;
+  padding: 6px 10px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 11px;
+  color: var(--text);
+  font-family: 'SF Mono', 'Menlo', 'Monaco', monospace;
+  user-select: all;
+  cursor: text;
+}
+
+/* AI 配置箭头 */
+#ai-arrow {
+  font-size: 10px;
+  cursor: pointer;
+  color: var(--text-3);
+  transition: transform 0.2s;
+  user-select: none;
+  padding: 4px 6px;
+}
+#ai-arrow:hover { color: var(--text); }
+#ai-arrow.open { transform: rotate(90deg); }
+
+/* 可点击行 */
+.clickable {
+  cursor: pointer;
+  padding: 2px 0;
+  border-radius: 4px;
+  transition: background 0.15s;
+}
+.clickable:hover { background: var(--bg-hover); }
 
 /* 目录浏览器弹窗 */
 .dir-modal-mask {

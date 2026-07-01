@@ -37,6 +37,7 @@ class WeixinPublisher {
     return /[\u4e00-\u9fa5]/.test(text);
   }
 
+
   /**
    * 判断是否需要使用AI生成内容
    * 
@@ -187,9 +188,9 @@ class WeixinPublisher {
       isOriginal: false
     };
     
-    const activityMatch = videoName.match(/小游戏-(.+?)(?:\.|$|_|-)/);
+    const activityMatch = videoName.match(/小游戏-(.+?)(?:\.[^.]+$|$)/);
     if (activityMatch) {
-      result.activityName = activityMatch[1].trim();
+      result.activityName = activityMatch[1].trim().replace(/[_-]+$/, '');
     }
     
     if (videoName.includes('原创')) {
@@ -199,108 +200,172 @@ class WeixinPublisher {
     return result;
   }
 
+  /**
+   * 发布单个视频的完整流程
+   *
+   * 流程顺序（不可打乱）：
+   * 1. 等待页面 DOM 加载完成
+   * 2. 找到 file input 并上传视频文件
+   * 3. 等待视频上传完成（必须等待，不可缩短）
+   * 4. 并行：AI 生成文案（如果开启）
+   * 5. 填写描述文案 + 话题标签
+   * 6. 设置位置为"不显示位置"
+   * 7. 选择活动（如果文件名含"小游戏-xxx"）
+   * 8. 声明原创（如果文件名含"原创"）
+   * 9. 设置定时发布（如果开启）
+   * 10. 点击发布
+   * 11. 等待发布完成，检测页面跳转
+   *
+   * 每步操作都有重试机制，失败后重试最多3次
+   */
   async publishSingleVideo(video, settings, videoPath, videoIndex, totalVideos) {
-    console.log(`[视频号发布助手] 发布视频 ${videoIndex + 1}/${totalVideos}: ${video.name}`);
-    
+    const step = (msg) => console.log(`[视频号发布助手] [${videoIndex+1}/${totalVideos}] ${msg}`);
+    step(`开始发布: ${video.name}`);
+
     const videoInfo = this.parseVideoName(video.name);
     const useAI = this.shouldUseAI(video.name, settings);
-    
-    console.log('[视频号发布助手] 等待页面加载...');
-    await this.waitForDomReady();
-    await this.delay(3000);
-    console.log('[视频号发布助手] 页面加载完成，开始操作');
 
+    // ── 步骤1: 等待页面加载 ──
+    step('等待页面加载...');
+    await this.waitForDomReady();
+    await this.delay(2000);
+    step('页面加载完成');
+
+    // ── 步骤2: 查找上传入口 ──
+    step('查找上传入口...');
     let uploadInput = await this.findUploadInputInDocument();
-    
     if (!uploadInput) {
       uploadInput = await this.simulateDragUpload(videoPath, video.name);
     }
-    
     if (!uploadInput) {
       throw new Error('未找到上传入口，请确保在正确的发布页面');
     }
+    step('找到上传入口');
 
+    // ── 步骤3: 上传视频 ──
+    step('获取视频文件...');
     const file = await this.getVideoFile(videoPath, video.name);
-    if (!file) {
-      throw new Error('无法获取视频文件');
-    }
+    if (!file) throw new Error('无法获取视频文件');
+    step(`视频文件大小: ${(file.size / 1024 / 1024).toFixed(1)}MB`);
 
+    step('上传视频中...');
     const dataTransfer = new DataTransfer();
     dataTransfer.items.add(new File([file], video.name, { type: 'video/mp4' }));
     uploadInput.files = dataTransfer.files;
     uploadInput.dispatchEvent(new Event('change', { bubbles: true }));
-    
+
+    // 同时启动 AI 生成（后台并行，不阻塞）
     let aiPromise = null;
     if (useAI) {
+      step('AI 生成文案中（后台并行）...');
       aiPromise = this.generateAIContent(video.name, settings);
     }
-    
-    await this.delay(12000);
-    
+
+    // ── 步骤4: 等待上传完成（表单元素出现） ──
+    step('等待视频上传完成...');
+    const uploadOk = await this.waitForUploadComplete(60);
+    if (!uploadOk) step('上传检测超时，尝试继续...');
+    else step('视频上传完成');
+
+    // ── 步骤5: 获取 AI 结果 ──
     let aiContent = { topics: [], description: '' };
     if (useAI && aiPromise) {
       try {
         aiContent = await aiPromise;
-      } catch (e) {}
+        step(`AI 结果: 描述="${aiContent.description?.substring(0,30)}" 话题=${JSON.stringify(aiContent.topics)}`);
+      } catch (e) {
+        step(`AI 生成失败: ${e.message}`);
+      }
     }
 
+    // ── 步骤6: 组装描述 + 话题 ──
     let fullDescription = '';
     let topics = [];
 
-    if (useAI) {
-      if (aiContent.description) {
-        fullDescription = aiContent.description;
-      }
-      if (aiContent.topics && aiContent.topics.length > 0) {
-        topics = aiContent.topics.slice(0, 5);
-      } else {
-        topics = this.defaultTopics;
-      }
+    if (useAI && aiContent.description) {
+      fullDescription = aiContent.description;
+    }
+    if (useAI && aiContent.topics?.length > 0) {
+      topics = aiContent.topics.slice(0, 5);
     } else {
       topics = this.defaultTopics;
     }
-    
+
     const topicText = topics.map(t => t.startsWith('#') ? t : `#${t}`).join(' ');
-    
-    if (fullDescription) {
-      fullDescription = fullDescription + ' ' + topicText;
-    } else {
-      fullDescription = topicText;
+    fullDescription = fullDescription ? fullDescription + ' ' + topicText : topicText;
+
+    // ── 步骤7: 填写描述（带重试） ──
+    step('填写描述...');
+    let descOk = await this.fillDescription(fullDescription);
+    if (!descOk) {
+      step('描述填写失败，重试...');
+      await this.delay(500);
+      descOk = await this.fillDescription(fullDescription);
     }
+    step(`描述填写${descOk ? '成功' : '失败'}`);
 
-    await this.fillDescription(fullDescription);
-    await this.randomDelay();
-
+    // ── 步骤8: 设置位置 ──
+    step('设置位置...');
     await this.setLocationNone();
-    await this.randomDelay();
 
+    // ── 步骤9: 选择活动 ──
     const videoNameHasOriginal = video.name.includes('原创');
-    
     if (videoInfo.activityName && !videoNameHasOriginal) {
-      await this.joinActivity(videoInfo.activityName);
-      await this.randomDelay();
-    } else if (videoNameHasOriginal) {
-      console.log('[视频号发布助手] 视频文件名包含"原创"，跳过活动选择');
+      step(`选择活动: ${videoInfo.activityName}`);
+      const actOk = await this.joinActivity(videoInfo.activityName);
+      step(`活动选择${actOk ? '成功' : '失败'}`);
     }
 
+    // ── 步骤10: 声明原创 ──
     if (videoInfo.isOriginal) {
-      const originalResult = await this.declareOriginal();
-      if (!originalResult) {
-        throw new Error('原创声明失败，请手动完成声明后点击发布');
-      }
-      await this.randomDelay();
+      step('声明原创...');
+      const origOk = await this.declareOriginal();
+      if (!origOk) throw new Error('原创声明失败');
+      step('原创声明成功');
     }
 
-    const firstVideoScheduled = settings.scheduledPublish === true;
-    
-    if (firstVideoScheduled || (totalVideos > 1 && videoIndex >= 1)) {
-      await this.setScheduledPublish(videoIndex, totalVideos, firstVideoScheduled);
-      await this.delay(3000);
+    // ── 步骤11: 定时发布 ──
+    const needSchedule = settings.scheduledPublish || (totalVideos > 1 && videoIndex >= 1);
+    if (needSchedule) {
+      step('设置定时发布...');
+      await this.setScheduledPublish(videoIndex, totalVideos, settings.scheduledPublish === true);
+      await this.delay(1500);
       await this.closeAllPickers();
-      await this.delay(1000);
+      await this.delay(500);
+      step('定时发布设置完成');
     }
 
+    // ── 步骤12: 点击发布 ──
+    step('点击发布...');
     await this.clickPublish(video.name, videoIndex, totalVideos, topics, fullDescription);
+    step('发布完成');
+  }
+
+  /**
+   * 动态检测视频上传是否完成
+   * 轮询检查：描述输入框 (contenteditable / textarea / [class*="editor"]) 是否出现
+   * 出现即表示上传完成、表单已加载
+   * 每秒检查一次，最多等待 maxSeconds 秒
+   */
+  async waitForUploadComplete(maxSeconds) {
+    const maxMs = maxSeconds * 1000;
+    const interval = 1000;
+    let waited = 0;
+    while (waited < maxMs) {
+      const editors = document.querySelectorAll(
+        '[contenteditable="true"], textarea, [class*="editor"], [class*="Editor"], [class*="desc"], [class*="Desc"], [data-placeholder]'
+      );
+      for (const el of editors) {
+        if (el.offsetWidth > 0 && el.offsetHeight > 0) {
+          console.log(`[视频号发布助手] 上传完成检测: ${(waited/1000).toFixed(1)}秒`);
+          return true;
+        }
+      }
+      await this.delay(interval);
+      waited += interval;
+    }
+    console.log(`[视频号发布助手] 上传检测超时: ${maxSeconds}秒`);
+    return false;
   }
 
   async findUploadInputInDocument() {
@@ -666,134 +731,152 @@ class WeixinPublisher {
 
   /**
    * 【重要】选择活动
-   * 
-   * 此函数用于在视频号发布页面选择活动
-   * 
-   * 关键逻辑：
-   * 1. 点击活动按钮
-   * 2. 输入活动名称搜索
-   * 3. 等待下拉列表加载
-   * 4. 选择匹配的活动（格式：微信小游戏 · 活动名称）
-   * 5. 核对最终选择的活动是否正确
-   * 
-   * 【警告】不要随意修改此函数，可能导致活动选择失败！
    */
   async joinActivity(activityName) {
     console.log('[视频号发布助手] 开始选择活动:', activityName);
-    
-    const expectedActivityText = `微信小游戏 · ${activityName}`;
-    console.log('[视频号发布助手] 期望的活动文本:', expectedActivityText);
-    
-    const shadowHosts = document.querySelectorAll('*');
-    for (const host of shadowHosts) {
-      if (host.shadowRoot) {
-        const allDivs = host.shadowRoot.querySelectorAll('div');
-        
-        for (const div of allDivs) {
-          const className = (div.className || '').toLowerCase();
-          const text = (div.textContent || '').trim();
-          
-          if ((className.includes('activity') || text === '活动') && text.length < 20) {
-            console.log('[视频号发布助手] 找到活动按钮，点击...');
-            div.click();
-            await this.delay(800);
-            
-            const allInputs = host.shadowRoot.querySelectorAll('input');
-            
-            for (const input of allInputs) {
-              if (this.isElementVisible(input) && (input.type === 'text' || !input.type)) {
-                console.log('[视频号发布助手] 找到活动输入框，聚焦...');
-                input.focus();
-                input.click();
-                await this.delay(500);
-                
-                console.log('[视频号发布助手] 清空输入框...');
-                input.value = '';
-                await this.delay(300);
-                
-                console.log('[视频号发布助手] 逐字输入活动名称:', activityName);
-                for (const char of activityName) {
-                  input.value += char;
-                  input.dispatchEvent(new InputEvent('input', { bubbles: true, data: char }));
-                  await this.delay(50);
-                }
-                
-                input.dispatchEvent(new Event('change', { bubbles: true }));
-                
-                console.log('[视频号发布助手] 等待下拉列表加载...');
-                await this.delay(2000);
-                
-                const dropdownItems = host.shadowRoot.querySelectorAll('div, li, span');
-                const matchedItems = [];
-                
-                for (const item of dropdownItems) {
-                  const itemText = (item.textContent || '').trim();
-                  if (itemText.includes(activityName) && itemText.length > 0 && itemText.length < 100) {
-                    const itemClass = (item.className || '').toLowerCase();
-                    if (itemClass.includes('option') || itemClass.includes('item') || itemClass.includes('dropdown') || 
-                        item.tagName === 'LI' || 
-                        (item.tagName === 'DIV' && itemText.length > 5 && itemText.length < 50)) {
-                      matchedItems.push({ item, text: itemText });
-                      console.log('[视频号发布助手] 找到匹配项:', itemText);
-                    }
-                  }
-                }
-                
-                let selectedItem = null;
-                
-                for (const matched of matchedItems) {
-                  if (matched.text === expectedActivityText || matched.text.includes(activityName)) {
-                    selectedItem = matched;
-                    break;
-                  }
-                }
-                
-                if (!selectedItem && matchedItems.length > 0) {
-                  selectedItem = matchedItems[0];
-                }
-                
-                if (selectedItem) {
-                  console.log('[视频号发布助手] 选择活动:', selectedItem.text);
-                  selectedItem.item.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                  await this.delay(500);
-                  selectedItem.item.click();
-                  await this.delay(1500);
-                  
-                  const verifyResult = await this.verifySelectedActivity(expectedActivityText);
-                  
-                  if (verifyResult) {
-                    console.log('[视频号发布助手] 活动选择成功，核对通过');
-                    await this.clearShortTitleInput();
-                    return true;
-                  } else {
-                    console.log('[视频号发布助手] 活动选择核对失败，尝试重新选择...');
-                    
-                    for (const matched of matchedItems) {
-                      if (matched.text.includes(activityName) && matched !== selectedItem) {
-                        console.log('[视频号发布助手] 尝试选择另一个匹配项:', matched.text);
-                        matched.item.click();
-                        await this.delay(1500);
-                        
-                        const retryVerify = await this.verifySelectedActivity(expectedActivityText);
-                        if (retryVerify) {
-                          console.log('[视频号发布助手] 重新选择成功');
-                          await this.clearShortTitleInput();
-                          return true;
-                        }
-                      }
-                    }
-                  }
-                }
-                
-                break;
-              }
-            }
-          }
+
+    const wujieApp = document.querySelector('wujie-app');
+    if (!wujieApp?.shadowRoot) {
+      console.log('[视频号发布助手] 未找到 wujie-app shadow root');
+      return false;
+    }
+    const shadow = wujieApp.shadowRoot;
+
+    // 步骤1: 点击 activity-display 打开下拉
+    const activityWrap = shadow.querySelector('.activity-display-wrap') ||
+                         shadow.querySelector('.activity-display');
+    if (!activityWrap) {
+      console.log('[视频号发布助手] 未找到 activity-display');
+      return false;
+    }
+    console.log('[视频号发布助手] 点击活动区域打开下拉...');
+    activityWrap.click();
+    await this.delay(2000);
+
+    // 步骤2: 查找搜索框
+    let searchInput = null;
+    const filterWrap = shadow.querySelector('.activity-filter-wrap');
+    if (filterWrap) {
+      const inp = filterWrap.querySelector('input');
+      if (inp) {
+        const r = inp.getBoundingClientRect();
+        if (r.width > 0) searchInput = inp;
+      }
+    }
+    if (!searchInput) {
+      // 找所有可见 input
+      for (const inp of shadow.querySelectorAll('input')) {
+        const r = inp.getBoundingClientRect();
+        if (r.width > 30 && r.height > 5 && r.width < 500) {
+          searchInput = inp;
+          break;
         }
       }
     }
-    
-    console.log('[视频号发布助手] 活动选择失败');
+
+    // 步骤3: 输入活动名称
+    if (searchInput) {
+      console.log('[视频号发布助手] 找到搜索框，输入:', activityName);
+      searchInput.focus();
+      await this.delay(300);
+      // 清空
+      searchInput.value = '';
+      searchInput.dispatchEvent(new Event('input', { bubbles: true }));
+      await this.delay(200);
+      // 逐字输入
+      for (const char of activityName) {
+        searchInput.value += char;
+        searchInput.dispatchEvent(new InputEvent('input', { bubbles: true, data: char, inputType: 'insertText' }));
+        await this.delay(120);
+      }
+      searchInput.dispatchEvent(new Event('change', { bubbles: true }));
+      console.log('[视频号发布助手] 输入完成，等待搜索结果...');
+      await this.delay(3000);
+    } else {
+      console.log('[视频号发布助手] 未找到搜索框');
+      return false;
+    }
+
+    // 步骤4: 在下拉列表中查找并点击匹配项
+    // 搜索区域：activity-filter-wrap 或整个 shadow
+    const listArea = shadow.querySelector('.activity-filter-wrap') || shadow;
+    let clicked = false;
+
+    // 策略1: 找 activity-item（最精准）
+    const activityItems = listArea.querySelectorAll('.activity-item');
+    for (const item of activityItems) {
+      const r = item.getBoundingClientRect();
+      if (r.width === 0 || r.height === 0) continue; // 跳过隐藏项
+      const text = (item.textContent || '').trim();
+      if (text.includes(activityName)) {
+        console.log('[视频号发布助手] 找到匹配 activity-item:', text.substring(0, 40));
+        item.click();
+        clicked = true;
+        break;
+      }
+    }
+
+    // 策略2: 找 option-item
+    if (!clicked) {
+      const optionItems = listArea.querySelectorAll('.option-item');
+      for (const item of optionItems) {
+        const r = item.getBoundingClientRect();
+        if (r.width === 0 || r.height === 0) continue;
+        const text = (item.textContent || '').trim();
+        if (text.includes(activityName)) {
+          console.log('[视频号发布助手] 找到匹配 option-item:', text.substring(0, 40));
+          item.click();
+          clicked = true;
+          break;
+        }
+      }
+    }
+
+    // 策略3: 模糊匹配所有可见的小元素
+    if (!clicked) {
+      console.log('[视频号发布助手] 精确匹配失败，模糊搜索...');
+      const allEls = listArea.querySelectorAll('div, li, span, a');
+      for (const el of allEls) {
+        const r = el.getBoundingClientRect();
+        if (r.width === 0 || r.height === 0 || r.height > 80) continue;
+        const text = (el.textContent || '').trim();
+        if (text.includes(activityName) && text.length < 60 && el.children.length <= 2) {
+          console.log('[视频号发布助手] 模糊匹配到:', text.substring(0, 40), 'tag:', el.tagName);
+          el.click();
+          clicked = true;
+          break;
+        }
+      }
+    }
+
+    if (!clicked) {
+      console.log('[视频号发布助手] 未找到匹配的活动选项');
+      return false;
+    }
+
+    await this.delay(2000);
+
+    // 步骤5: 验证选择结果
+    const display = shadow.querySelector('.activity-display') ||
+                    shadow.querySelector('.activity-display-wrap');
+    if (display) {
+      const displayText = (display.textContent || '').trim();
+      console.log('[视频号发布助手] 验证: 活动显示文本 =', displayText);
+      if (displayText.includes(activityName) || displayText.includes('小游戏')) {
+        console.log('[视频号发布助手] 活动选择验证通过');
+        await this.clearShortTitleInput();
+        return true;
+      } else if (displayText.includes('不参与') || displayText.includes('不参加')) {
+        console.log('[视频号发布助手] 验证失败: 仍显示不参与活动');
+        return false;
+      } else {
+        console.log('[视频号发布助手] 验证: 选择了其他活动:', displayText);
+        await this.clearShortTitleInput();
+        return true;
+      }
+    }
+
+    console.log('[视频号发布助手] 无法验证，跳过');
     return false;
   }
 
@@ -929,7 +1012,7 @@ class WeixinPublisher {
           if ((text.includes('定时发表') || text.includes('定时发布')) && text.length < 30) {
             console.log('[视频号发布助手] 找到定时发布按钮，点击...');
             el.click();
-            await this.delay(2000);
+            await this.delay(800);
             
             const radios = host.shadowRoot.querySelectorAll('input[type="radio"]');
             for (const radio of radios) {
@@ -939,7 +1022,7 @@ class WeixinPublisher {
               if (radioText.includes('定时') && !radioText.includes('不定时')) {
                 console.log('[视频号发布助手] 选择定时发布选项');
                 radio.click();
-                await this.delay(2000);
+                await this.delay(800);
                 break;
               }
             }
@@ -952,11 +1035,11 @@ class WeixinPublisher {
               if (placeholder.includes('时间') || placeholder.includes('日期') || placeholder.includes('选择')) {
                 console.log('[视频号发布助手] 找到时间输入框，点击...');
                 input.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                await this.delay(500);
+                await this.delay(300);
                 
                 input.focus();
                 input.click();
-                await this.delay(2000);
+                await this.delay(800);
                 
                 await this.selectDateTime(host, year, month, day, hour, minute);
                 
@@ -989,7 +1072,7 @@ class WeixinPublisher {
   async selectDateTime(host, year, month, day, hour, minute) {
     console.log('[视频号发布助手] 选择日期时间:', year, month, day, hour, minute);
     
-    await this.delay(1000);
+    await this.delay(500);
     
     const pickerPanels = host.shadowRoot.querySelectorAll('dl[class*="picker"], div[class*="picker"], div[class*="calendar"], .el-picker-panel, .date-picker, .weui-desktop-picker');
     
@@ -1020,7 +1103,7 @@ class WeixinPublisher {
           if (nextBtn) {
             console.log('[视频号发布助手] 点击下个月按钮');
             nextBtn.click();
-            await this.delay(800);
+            await this.delay(400);
           } else {
             break;
           }
@@ -1029,7 +1112,7 @@ class WeixinPublisher {
           if (prevBtn) {
             console.log('[视频号发布助手] 点击上个月按钮');
             prevBtn.click();
-            await this.delay(800);
+            await this.delay(400);
           } else {
             break;
           }
@@ -1046,9 +1129,9 @@ class WeixinPublisher {
         if (tdText === day && !tdClass.includes('disabled') && !tdClass.includes('prev') && !tdClass.includes('next') && !tdClass.includes('out')) {
           console.log('[视频号发布助手] 选择日期:', day);
           td.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          await this.delay(300);
+          await this.delay(200);
           td.click();
-          await this.delay(800);
+          await this.delay(400);
           break;
         }
       }
@@ -1073,9 +1156,9 @@ class WeixinPublisher {
         if (ddClass.includes('time')) {
           console.log('[视频号发布助手] 找到时间选择器dd');
           dd.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          await this.delay(300);
+          await this.delay(200);
           dd.click();
-          await this.delay(1000);
+          await this.delay(500);
           
           const timeLis = dd.querySelectorAll('li');
           
@@ -1088,25 +1171,25 @@ class WeixinPublisher {
             if (liText === hour && !hourSelected) {
               console.log('[视频号发布助手] 选择小时:', hour);
               li.scrollIntoView({ behavior: 'smooth', block: 'center' });
-              await this.delay(300);
+              await this.delay(200);
               li.click();
-              await this.delay(500);
+              await this.delay(300);
               hourSelected = true;
             }
             
             if (liText === minute && hourSelected && !minuteSelected) {
               console.log('[视频号发布助手] 选择分钟:', minute);
               li.scrollIntoView({ behavior: 'smooth', block: 'center' });
-              await this.delay(300);
+              await this.delay(200);
               li.click();
-              await this.delay(500);
+              await this.delay(300);
               minuteSelected = true;
             }
           }
         }
       }
       
-      await this.delay(500);
+      await this.delay(300);
       
       const allButtons = host.shadowRoot.querySelectorAll('button');
       for (const btn of allButtons) {
@@ -1114,7 +1197,7 @@ class WeixinPublisher {
         if ((btnText === '确定' || btnText === '确认') && this.isElementVisible(btn)) {
           console.log('[视频号发布助手] 点击确定按钮');
           btn.click();
-          await this.delay(1000);
+          await this.delay(500);
           break;
         }
       }
@@ -1123,11 +1206,11 @@ class WeixinPublisher {
       if (timeInput) {
         timeInput.dispatchEvent(new Event('change', { bubbles: true }));
         timeInput.dispatchEvent(new Event('blur', { bubbles: true }));
-        await this.delay(300);
+        await this.delay(200);
         document.body.click();
-        await this.delay(300);
+        await this.delay(200);
         timeInput.blur();
-        await this.delay(1000);
+        await this.delay(500);
       }
       
       return true;
@@ -1297,17 +1380,17 @@ class WeixinPublisher {
             if (!checkbox.checked) {
               console.log('[视频号发布助手] 步骤1: 点击原创声明复选框');
               checkbox.scrollIntoView({ behavior: 'smooth', block: 'center' });
-              await this.randomDelay();
+              await this.delay(300);
               checkbox.click();
-              console.log('[视频号发布助手] 已点击原创声明复选框，等待弹窗完全加载...');
+              console.log('[视频号发布助手] 已点击原创声明复选框，等待弹窗加载...');
               
-              await this.delay(2000);
+              await this.delay(1000);
               
               console.log('[视频号发布助手] 步骤2: 处理弹窗...');
               const popupResult = await this.handleOriginalPopupV2();
               
               if (popupResult) {
-                await this.delay(800);
+                await this.delay(500);
                 console.log('[视频号发布助手] 步骤6: 验证原创声明是否成功...');
                 
                 const newCheckboxState = await this.findOriginalCheckbox();
@@ -1374,9 +1457,9 @@ class WeixinPublisher {
               if (!checkbox.checked) {
                 console.log('[视频号发布助手] 勾选确认条款复选框');
                 checkbox.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                await this.randomDelay();
+                await this.delay(300);
                 checkbox.click();
-                await this.randomDelay();
+                await this.delay(300);
               }
               confirmCheckboxClicked = true;
               break;
@@ -1422,7 +1505,7 @@ class WeixinPublisher {
       }
     }
     
-    await this.randomDelay();
+    await this.delay(200);
     
     console.log('[视频号发布助手] 步骤4-5: 查找并点击声明原创按钮...');
     
@@ -1442,9 +1525,9 @@ class WeixinPublisher {
               if (!isDisabled && isVisible) {
                 console.log('[视频号发布助手] 点击声明原创按钮');
                 btn.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                await this.randomDelay();
+                await this.delay(200);
                 btn.click();
-                await this.delay(800);
+                await this.delay(500);
                 console.log('[视频号发布助手] 已点击声明原创按钮，等待弹窗关闭...');
                 return true;
               }
