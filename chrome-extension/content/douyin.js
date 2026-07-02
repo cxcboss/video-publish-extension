@@ -724,70 +724,92 @@ class DouyinPublisher {
     console.log('====== [星图任务 DEBUG] ======');
     console.log('[星图] 搜索词:', searchTerm);
 
-    // 步骤0: 滚动到页面底部触发懒加载
-    console.log('[星图] === 步骤0: 滚动页面触发渲染 ===');
-    window.scrollTo(0, document.body.scrollHeight);
-    await this.delay(1500);
-
-    // 步骤1: 点击"请选择星图任务"按钮（.star-btn）
-    console.log('[星图] === 步骤1: 查找并点击星图任务按钮 ===');
-
+    // 步骤0: 渐进式滚动，每滚一段检查一次按钮是否出现
+    console.log('[星图] === 步骤0: 渐进式滚动触发渲染 ===');
     let starBtn = null;
-    // 重试最多5次，每次间隔1秒
-    for (let attempt = 0; attempt < 5; attempt++) {
-      // 策略1: 找 class 含 star-btn 的元素
-      starBtn = document.querySelector('[class*="star-btn"]');
-      if (starBtn) {
-        console.log(`[星图] 策略1命中(class): attempt=${attempt}`);
-        break;
-      }
+    const pageHeight = document.body.scrollHeight;
+    const viewportH = window.innerHeight;
+    // 从当前位置开始，每次向下滚一个视窗高度，最多滚10次
+    for (let scrollRound = 0; scrollRound < 10; scrollRound++) {
+      const scrollTarget = Math.min((scrollRound + 1) * viewportH, pageHeight);
+      console.log(`[星图] 滚动到 y=${scrollRound + 1}/${Math.ceil(pageHeight / viewportH)}`);
+      window.scrollTo({ top: scrollTarget, behavior: 'instant' });
+      await this.delay(800);
 
-      // 策略2: 找包含"请选择星图任务"文本且 class 含 star-btn 的元素
-      const allEls = document.querySelectorAll('span, div');
-      for (const el of allEls) {
-        if (!this.isElementVisible(el)) continue;
-        const text = (el.textContent || '').trim();
-        if (text === '请选择星图任务') {
+      // 每次滚动后立即尝试查找按钮
+      // 策略1: class 含 star-btn
+      starBtn = document.querySelector('[class*="star-btn"]');
+      if (starBtn) { console.log(`[星图] 策略1命中(class) scrollRound=${scrollRound}`); break; }
+      // 策略2: 文本精确匹配
+      for (const el of document.querySelectorAll('span, div')) {
+        if (el.textContent && el.textContent.trim() === '请选择星图任务' && this.isElementVisible(el)) {
           starBtn = el;
-          console.log(`[星图] 策略2命中(文本精确): attempt=${attempt}`);
+          console.log(`[星图] 策略2命中(文本) scrollRound=${scrollRound}`);
           break;
         }
       }
       if (starBtn) break;
-
-      // 策略3: 找 class 含 star 且可点击的容器
-      for (const el of allEls) {
+      // 策略3: class 含 star 且包含星图文本
+      for (const el of document.querySelectorAll('[class*="star"], [class*="activity"]')) {
         if (!this.isElementVisible(el)) continue;
-        const cls = (el.className || '').toLowerCase();
         const text = (el.textContent || '').trim();
-        if ((cls.includes('star') && text.includes('星图任务')) ||
-            (text.includes('请选择星图任务') && el.children.length < 5)) {
+        if (text.includes('星图') && text.length < 100) {
           const r = el.getBoundingClientRect();
           if (r.width > 50 && r.height > 10) {
             starBtn = el;
-            console.log(`[星图] 策略3命中(star类+文本): attempt=${attempt} class="${cls.substring(0,60)}"`);
+            console.log(`[星图] 策略3命中(star+文本) scrollRound=${scrollRound}`);
             break;
           }
         }
       }
       if (starBtn) break;
+    }
 
-      console.log(`[星图] attempt ${attempt}: 未找到按钮，等待重试...`);
-      await this.delay(1000);
+    // 步骤1: 滚动完毕后，额外等待 + 最后一轮重试
+    if (!starBtn) {
+      console.log('[星图] === 步骤1: 滚动完毕后额外重试 ===');
+      // 额外等待 2 秒让 React 渲染稳定
+      await this.delay(2000);
+      for (let attempt = 0; attempt < 5; attempt++) {
+        starBtn = document.querySelector('[class*="star-btn"]');
+        if (starBtn) { console.log(`[星图] 重试命中(class) attempt=${attempt}`); break; }
+        const allEls = document.querySelectorAll('span, div');
+        for (const el of allEls) {
+          if (!this.isElementVisible(el)) continue;
+          if ((el.textContent || '').trim() === '请选择星图任务') {
+            starBtn = el;
+            console.log(`[星图] 重试命中(文本) attempt=${attempt}`);
+            break;
+          }
+        }
+        if (starBtn) break;
+        console.log(`[星图] attempt ${attempt}: 未找到按钮，等待重试...`);
+        await this.delay(1000);
+      }
     }
 
     if (!starBtn) {
-      // 最终 dump：列出所有包含"星图"或"任务"的可见元素
-      console.log('[星图] === 最终dump: 所有含星图/任务的可见元素 ===');
+      // 最终 dump：列出所有含"星图"或"任务"的可见元素（不过滤 children 数量）
+      console.log('[星图] === 最终dump: 所有含星图/任务/星的可见元素 ===');
       const dumpEls = document.querySelectorAll('*');
       for (const el of dumpEls) {
         if (!this.isElementVisible(el)) continue;
         const text = (el.textContent || '').trim();
-        if (text.length > 0 && text.length < 100 && el.children.length <= 3) {
-          if (text.includes('星图') || text.includes('任务')) {
+        if (text.length > 0 && text.length < 200) {
+          if (text.includes('星图') || text.includes('星图任务') || text.includes('请选择') || text.includes('活动任务')) {
             const r = el.getBoundingClientRect();
-            console.log(`[星图] DUMP <${el.tagName}> "${text.substring(0,60)}" class="${(el.className||'').substring(0,60)}" ${Math.round(r.width)}x${Math.round(r.height)}`);
+            if (r.width > 20) {
+              console.log(`[星图] DUMP <${el.tagName}> "${text.substring(0,80)}" class="${(el.className||'').substring(0,60)}" ${Math.round(r.width)}x${Math.round(r.height)} @(${Math.round(r.x)},${Math.round(r.y)})`);
+            }
           }
+        }
+      }
+      // 也列出所有含 star 但无星图文本的元素
+      for (const el of document.querySelectorAll('[class*="star"], [class*="activity"]')) {
+        if (!this.isElementVisible(el)) continue;
+        const r = el.getBoundingClientRect();
+        if (r.width > 20) {
+          console.log(`[星图] STAR-CLASS <${el.tagName}> text="${(el.textContent||'').substring(0,60)}" class="${(el.className||'').substring(0,60)}" ${Math.round(r.width)}x${Math.round(r.height)}`);
         }
       }
       console.log('[星图] 未找到星图任务按钮');
