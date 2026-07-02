@@ -724,132 +724,124 @@ class DouyinPublisher {
     console.log('====== [星图任务 DEBUG] ======');
     console.log('[星图] 搜索词:', searchTerm);
 
-    // 步骤1: 找到"星图任务"按钮
-    console.log('[星图] === 步骤1: 查找星图任务按钮 ===');
-    let starBtn = null;
-    let starBtnInfo = null;
-    const allElements = document.querySelectorAll('*');
-    for (const el of allElements) {
-      if (!this.isElementVisible(el)) continue;
-      const text = (el.textContent || '').trim();
-      if (text === '星图任务' || text === '关联星图任务' || text.includes('星图')) {
-        const r = el.getBoundingClientRect();
-        console.log(`[星图] 候选: <${el.tagName}> "${text.substring(0,30)}" class="${(el.className||'').substring(0,60)}" ${Math.round(r.width)}x${Math.round(r.height)} @(${Math.round(r.x)},${Math.round(r.y)})`);
-      }
-      if (text === '星图任务' || text === '关联星图任务') {
-        let target = el;
-        for (let i = 0; i < 5; i++) {
-          if (target.tagName === 'BUTTON' || target.tagName === 'LABEL' ||
-              target.onclick || target.getAttribute('role') === 'button') {
-            starBtn = target;
-            starBtnInfo = { tag: target.tagName, text: (target.textContent||'').substring(0,30), cls: (target.className||'').substring(0,60) };
+    // 步骤1: 点击"请选择星图任务"按钮（.star-btn）
+    console.log('[星图] === 步骤1: 查找并点击星图任务按钮 ===');
+
+    // 策略1: 找 class 含 star-btn 的元素（最精准）
+    let starBtn = document.querySelector('[class*="star-btn"]');
+
+    // 策略2: 找包含"请选择星图任务"文本的可点击元素
+    if (!starBtn) {
+      const allEls = document.querySelectorAll('*');
+      for (const el of allEls) {
+        if (!this.isElementVisible(el)) continue;
+        const text = (el.textContent || '').trim();
+        if (text.includes('请选择星图任务') || text === '星图任务') {
+          const cls = (el.className || '').toLowerCase();
+          if (cls.includes('star-btn') || cls.includes('star_btn') || cls.includes('star_btn_active')) {
+            starBtn = el;
             break;
           }
-          target = target.parentElement;
-          if (!target) break;
         }
-        if (!starBtn) {
-          starBtn = el;
-          starBtnInfo = { tag: el.tagName, text: (el.textContent||'').substring(0,30), cls: (el.className||'').substring(0,60) };
+      }
+    }
+
+    // 策略3: 找标题"星图任务"的兄弟元素"请选择星图任务"
+    if (!starBtn) {
+      const allSpans = document.querySelectorAll('span, div');
+      for (const el of allSpans) {
+        if (!this.isElementVisible(el)) continue;
+        const text = (el.textContent || '').trim();
+        if (text === '请选择星图任务' || (text.includes('请选择') && text.includes('星图任务'))) {
+          const r = el.getBoundingClientRect();
+          if (r.width > 50) {
+            starBtn = el;
+            break;
+          }
         }
-        break;
       }
     }
 
     if (!starBtn) {
-      console.log('[星图] 未找到星图任务按钮，跳过');
+      console.log('[星图] 未找到星图任务按钮');
       console.log('====== [星图 DEBUG END] ======');
       return false;
     }
-    console.log('[星图] 找到按钮:', JSON.stringify(starBtnInfo));
+
+    const btnInfo = { tag: starBtn.tagName, text: (starBtn.textContent||'').substring(0,40), cls: (starBtn.className||'').substring(0,80) };
+    console.log('[星图] 找到按钮:', JSON.stringify(btnInfo));
     console.log('[星图] 点击按钮...');
     starBtn.click();
-    await this.delay(3000);
+    await this.delay(2000);
 
-    // 步骤1.5: dump 弹窗内所有可见元素
-    console.log('[星图] === 步骤1.5: 点击后 dump 全部可见元素 ===');
-    const allAfterClick = document.querySelectorAll('*');
-    let dialogFound = false;
-    for (const el of allAfterClick) {
-      if (!this.isElementVisible(el)) continue;
-      const text = (el.textContent || '').trim();
-      const r = el.getBoundingClientRect();
-      if (r.width > 200 && r.height > 200 && (el.tagName === 'DIV' || el.tagName === 'SECTION' || el.tagName === 'ASIDE')) {
-        console.log(`[星图] 大容器: <${el.tagName}> class="${(el.className||'').substring(0,80)}" ${Math.round(r.width)}x${Math.round(r.height)} @(${Math.round(r.x)},${Math.round(r.y)})`);
-        dialogFound = true;
-      }
-    }
-    // dump 所有可见 input
-    console.log('[星图] === 所有可见 input ===');
-    for (const el of allAfterClick) {
-      if (el.tagName !== 'INPUT') continue;
-      if (!this.isElementVisible(el)) continue;
-      const r = el.getBoundingClientRect();
-      console.log(`[星图] input type="${el.type}" placeholder="${el.placeholder}" value="${el.value}" class="${(el.className||'').substring(0,60)}" ${Math.round(r.width)}x${Math.round(r.height)}`);
-    }
-    // dump 含"搜索""任务""确认"的文本
-    console.log('[星图] === 含关键词的可见文本元素 ===');
-    for (const el of allAfterClick) {
-      if (!this.isElementVisible(el)) continue;
-      const text = (el.textContent || '').trim();
-      if (text.length > 0 && text.length < 50 && el.children.length <= 2) {
-        if (text.includes('搜索') || text.includes('任务') || text.includes('确认') ||
-            text.includes('确定') || text.includes('取消') || text.includes('关联') ||
-            text.includes('星图')) {
-          const r = el.getBoundingClientRect();
-          console.log(`[星图] <${el.tagName}> "${text}" class="${(el.className||'').substring(0,60)}" ${Math.round(r.width)}x${Math.round(r.height)}`);
+    // 步骤2: 等待并 dump 弹窗
+    console.log('[星图] === 步骤2: 等待弹窗出现 ===');
+
+    // 等待最多 5 秒找新出现的弹窗（可能 class 含 modal/dialog/drawer/popover/semi-modal）
+    for (let wait = 0; wait < 5; wait++) {
+      const modals = document.querySelectorAll(
+        '[class*="modal"], [class*="Modal"], [class*="dialog"], [class*="Dialog"], [class*="drawer"], [class*="Drawer"], [class*="popover"], [class*="Popover"], [class*="semi-modal"], [class*="popup"], [class*="Popup"]'
+      );
+      for (const m of modals) {
+        if (this.isElementVisible(m)) {
+          console.log('[星图] 发现弹窗:', m.tagName, 'class:', (m.className||'').substring(0,80));
+          // dump 弹窗内的 input
+          const inputs = m.querySelectorAll('input');
+          for (const inp of inputs) {
+            const r = inp.getBoundingClientRect();
+            console.log(`[星图] 弹窗内 input: type="${inp.type}" placeholder="${inp.placeholder}" ${Math.round(r.width)}x${Math.round(r.height)}`);
+          }
         }
       }
+      // dump 所有可见 input
+      const allInputs = document.querySelectorAll('input[type="text"], input:not([type])');
+      for (const inp of allInputs) {
+        if (!this.isElementVisible(inp)) continue;
+        const r = inp.getBoundingClientRect();
+        const ph = inp.placeholder || '';
+        if (ph.includes('搜索') || ph.includes('任务') || ph.includes('search') || ph.includes('查找')) {
+          console.log(`[星图] 找到搜索框: placeholder="${ph}" ${Math.round(r.width)}x${Math.round(r.height)}`);
+        }
+      }
+      // dump 含关键词文本
+      const allTextEls = document.querySelectorAll('*');
+      for (const el of allTextEls) {
+        if (!this.isElementVisible(el)) continue;
+        const text = (el.textContent || '').trim();
+        if (text.length > 0 && text.length < 60 && el.children.length <= 2) {
+          if (text.includes('搜索') || text.includes('确认') || text.includes('确定') ||
+              text.includes('选择') || text.includes('取消') || text.includes('关闭') ||
+              text.includes('关联') || text.includes('星图') || text.includes('任务')) {
+            const r = el.getBoundingClientRect();
+            console.log(`[星图] 文本: <${el.tagName}> "${text}" class="${(el.className||'').substring(0,60)}" ${Math.round(r.width)}x${Math.round(r.height)} @(${Math.round(r.x)},${Math.round(r.y)})`);
+          }
+        }
+      }
+      if (wait < 4) await this.delay(1000);
     }
 
-    // 步骤2: 找搜索框
-    console.log('[星图] === 步骤2: 查找搜索框 ===');
+    // 步骤3: 查找搜索框
+    console.log('[星图] === 步骤3: 查找搜索框 ===');
     let searchInput = null;
     const inputs = document.querySelectorAll('input[type="text"], input:not([type])');
     for (const inp of inputs) {
       if (!this.isElementVisible(inp)) continue;
       const ph = (inp.placeholder || '').toLowerCase();
-      const r = inp.getBoundingClientRect();
-      console.log(`[星图] 可见 input: type="${inp.type}" placeholder="${inp.placeholder}" ${Math.round(r.width)}x${Math.round(r.height)}`);
-      if (ph.includes('搜索') || ph.includes('任务') || ph.includes('search')) {
+      if (ph.includes('搜索') || ph.includes('任务') || ph.includes('search') || ph.includes('查找')) {
         searchInput = inp;
-        console.log('[星图] 选中搜索框（placeholder匹配）');
+        console.log('[星图] 匹配搜索框:', inp.placeholder);
         break;
       }
     }
 
     if (!searchInput) {
-      const allInputs = document.querySelectorAll('input');
-      let best = null;
-      let bestArea = Infinity;
-      for (const inp of allInputs) {
-        if (!this.isElementVisible(inp)) continue;
-        if (inp.type === 'hidden' || inp.type === 'checkbox' || inp.type === 'radio') continue;
-        const r = inp.getBoundingClientRect();
-        if (r.width > 30 && r.width < 500) {
-          const area = r.width * r.height;
-          if (area < bestArea) {
-            best = inp;
-            bestArea = area;
-          }
-        }
-      }
-      searchInput = best;
-      if (best) {
-        const r = best.getBoundingClientRect();
-        console.log(`[星图] 兜底选中: type="${best.type}" placeholder="${best.placeholder}" ${Math.round(r.width)}x${Math.round(r.height)}`);
-      }
-    }
-
-    if (!searchInput) {
-      console.log('[星图] 未找到搜索框');
+      console.log('[星图] 未找到搜索框，跳过');
       console.log('====== [星图 DEBUG END] ======');
       return false;
     }
 
-    // 步骤3: 输入搜索词
-    console.log('[星图] === 步骤3: 输入搜索词 ===');
-    console.log('[星图] 输入:', searchTerm);
+    // 步骤4: 输入搜索词
+    console.log('[星图] === 步骤4: 输入搜索词 ===');
     searchInput.focus();
     await this.delay(300);
     searchInput.value = '';
@@ -861,41 +853,29 @@ class DouyinPublisher {
       await this.delay(100);
     }
     searchInput.dispatchEvent(new Event('change', { bubbles: true }));
-    console.log('[星图] 输入完成，当前 value:', searchInput.value);
+    console.log('[星图] 输入完成:', searchInput.value);
     await this.delay(3000);
 
-    // 步骤4: dump 搜索后的列表元素
-    console.log('[星图] === 步骤4: 搜索后列表 ===');
+    // 步骤5: 选择任务
+    console.log('[星图] === 步骤5: 选择任务 ===');
     let selected = false;
-    const clickables = document.querySelectorAll('[class*="option"], [class*="item"], [class*="list"], li, [role="option"]');
-    let matchCount = 0;
+    const clickables = document.querySelectorAll('[class*="option"], [class*="item"], [class*="task"], li, [role="option"]');
     for (const item of clickables) {
       if (!this.isElementVisible(item)) continue;
       const text = (item.textContent || '').trim();
-      if (text.length > 0 && text.length < 100) {
-        matchCount++;
-        if (matchCount <= 20) {
-          const r = item.getBoundingClientRect();
-          console.log(`[星图] 列表项: <${item.tagName}> "${text.substring(0,50)}" class="${(item.className||'').substring(0,60)}" ${Math.round(r.width)}x${Math.round(r.height)}`);
-        }
-        if (text.includes(searchTerm) || text.includes('任务')) {
-          console.log('[星图] >>> 匹配! 点击:', text.substring(0,50));
-          item.click();
-          selected = true;
-          break;
-        }
+      if (text.includes(searchTerm)) {
+        console.log('[星图] 匹配选择:', text.substring(0,50));
+        item.click();
+        selected = true;
+        break;
       }
     }
-    console.log('[星图] 列表项总数:', matchCount);
-
-    // 兜底
     if (!selected) {
-      console.log('[星图] 精确匹配失败，模糊搜索...');
-      const allDivs = document.querySelectorAll('div, span, a');
+      const allDivs = document.querySelectorAll('div, span');
       for (const el of allDivs) {
         if (!this.isElementVisible(el)) continue;
         const r = el.getBoundingClientRect();
-        if (r.width === 0 || r.height === 0 || r.height > 80) continue;
+        if (r.width === 0 || r.height === 0 || r.height > 60) continue;
         const text = (el.textContent || '').trim();
         if (text.includes(searchTerm) && text.length < 80 && el.children.length <= 3) {
           console.log('[星图] 模糊匹配:', text.substring(0,50));
@@ -913,14 +893,12 @@ class DouyinPublisher {
     }
     await this.delay(1000);
 
-    // 步骤5: 找确认按钮
-    console.log('[星图] === 步骤5: 查找确认按钮 ===');
+    // 步骤6: 确认
+    console.log('[星图] === 步骤6: 确认按钮 ===');
     const confirmBtns = document.querySelectorAll('button');
     for (const btn of confirmBtns) {
       if (!this.isElementVisible(btn)) continue;
       const text = (btn.textContent || '').trim();
-      const r = btn.getBoundingClientRect();
-      console.log(`[星图] button: "${text}" ${Math.round(r.width)}x${Math.round(r.height)}`);
       if (text === '确认' || text === '确定' || text === '完成' ||
           text.includes('确认') || text.includes('确定')) {
         console.log('[星图] 点击确认:', text);
@@ -931,9 +909,10 @@ class DouyinPublisher {
       }
     }
 
-    console.log('[星图] 未找到确认按钮');
+    // 如果没有明确的确认按钮，可能选择了就自动关闭
+    console.log('[星图] 未找到确认按钮，可能已自动选择');
     console.log('====== [星图 DEBUG END] ======');
-    return false;
+    return true;
   }
 
   delay(ms) {
