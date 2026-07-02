@@ -265,10 +265,8 @@ async function finishAllPublish() {
   
   if (publishState.targetTabId) {
     detachDebugger(publishState.targetTabId);
-    console.log('[Background] 等待10秒后关闭最后一个发布标签页...');
-    await new Promise(resolve => setTimeout(resolve, 10000));
+    await new Promise(resolve => setTimeout(resolve, 3000));
     chrome.tabs.remove(publishState.targetTabId).catch(() => {});
-    console.log('[Background] 已关闭发布标签页');
     publishState.targetTabId = null;
   }
   
@@ -349,11 +347,11 @@ async function handleDouyinPublishDone(message) {
 
   if (publishState.currentIndex < publishState.videos.length) {
     if (oldTabId) {
-      console.log('[Background] 等待10秒后关闭标签页...');
+      console.log('[Background] 等待3秒后关闭标签页...');
       setTimeout(() => {
         chrome.tabs.remove(oldTabId).catch(() => {});
         console.log('[Background] 已关闭上一个发布标签页');
-      }, 10000);
+      }, 3000);
     }
     publishState.targetTabId = null;
     console.log('[Background] 等待8秒后发布下一个视频...');
@@ -396,11 +394,11 @@ async function handleVideoPublishDone() {
   
   if (publishState.currentIndex < publishState.videos.length) {
     if (oldTabId) {
-      console.log('[Background] 等待10秒后关闭标签页...');
+      console.log('[Background] 等待3秒后关闭标签页...');
       setTimeout(() => {
         chrome.tabs.remove(oldTabId).catch(() => {});
         console.log('[Background] 已关闭上一个发布标签页');
-      }, 10000);
+      }, 3000);
     }
     publishState.targetTabId = null;
     console.log('[Background] 等待8秒后发布下一个视频...');

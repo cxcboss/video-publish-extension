@@ -1,22 +1,20 @@
 /**
  * 抖音发布助手 - Content Script
  *
- * 负责：
+ * 负责在抖音创作者平台 (creator.douyin.com) 自动发布视频：
  * 1. 接收 background 的发布命令
- * 2. 在抖音创作者页面上传视频
- * 3. AI 生成文案和话题（与上传并行）
- * 4. 填写表单并点击发布
- * 5. 通知 background 发布结果
+ * 2. 上传视频文件（DataTransfer API 注入 input[type="file"]）
+ * 3. AI 生成文案和话题（可选，与上传并行）
+ * 4. 填写描述、话题、定时发布、星图任务等表单
+ * 5. 点击发布按钮，通知 background 发布结果
  *
- * 流程顺序：
- * 1. 等待页面加载
- * 2. 找到 file input 并上传
- * 3. 并行：AI 生成文案（不阻塞上传）
- * 4. 动态检测上传完成（轮询表单出现）
- * 5. 填写描述 + 话题（带重试）
- * 6. 定时发布（如果开启）
- * 7. 点击发布
- * 8. 检测发布完成
+ * 发布流程：页面加载 → 上传视频 → 并行AI生成 → 填写表单 → 点击发布
+ *
+ * 关键技术点：
+ * - React 合成事件系统：原生 .click() 无法触发 React onClick，必须用 reactClick()
+ * - React 懒加载：星图任务等区域在页面底部，需渐进式滚动触发渲染
+ * - contenteditable 填写：用 document.execCommand('insertText') 而非 value 赋值
+ * - React 受控组件：input[type="file"] 用 DataTransfer API 注入（不受 React 控制）
  */
 class DouyinPublisher {
   constructor() {
@@ -26,11 +24,7 @@ class DouyinPublisher {
   }
 
   init() {
-    console.log('[抖音发布助手] 初始化中...');
-
     chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-      console.log('[抖音发布助手] 收到消息:', message.action);
-
       if (message.action === 'startPublish') {
         this.publishSingleVideo(message.videos[0], message.settings, message.videoPath, message.videoIndex, message.totalVideos)
           .then(() => {
@@ -44,15 +38,12 @@ class DouyinPublisher {
           });
         return true;
       }
-
       if (message.action === 'ping') {
         sendResponse({ ready: true, elementCount: document.querySelectorAll('*').length });
         return true;
       }
     });
-
     this.isReady = true;
-    console.log('[抖音发布助手] 初始化完成');
   }
 
   async publishSingleVideo(video, settings, videoPath, videoIndex, totalVideos) {
@@ -60,37 +51,25 @@ class DouyinPublisher {
     const step = (msg) => console.log(`[抖音发布助手] [${idx}/${totalVideos}] ${msg}`);
     step(`开始发布: ${video.name}`);
 
-    // ── 步骤1: 等待页面加载 ──
-    step('等待页面加载...');
+    // 步骤1: 等待页面加载
     this.notifyProgress('等待页面加载...', idx, totalVideos);
     await this.waitForPageReady();
     await this.delay(1500);
-    step('页面加载完成');
 
-    // ── 解析文件名，提取活动任务名 ──
+    // 解析文件名，提取星图任务名（格式：小游戏-xxx.mp4）
     const taskInfo = this.parseTaskFromName(video.name);
-    if (taskInfo) {
-      step(`检测到星图任务: ${taskInfo.searchTerm} (原始: ${taskInfo.activityName})`);
-    }
 
-    // ── 步骤2: 查找上传入口 ──
-    step('查找上传入口...');
+    // 步骤2: 查找上传入口并上传视频
     this.notifyProgress('查找上传入口...', idx, totalVideos);
     const uploadInput = await this.findUploadInput();
-    if (!uploadInput) {
-      throw new Error('未找到上传入口，请确保在正确的发布页面');
-    }
-    step('找到上传入口');
+    if (!uploadInput) throw new Error('未找到上传入口，请确保在正确的发布页面');
 
-    // ── 步骤3: 上传视频 + 并行 AI 生成 ──
-    step('获取视频文件...');
-    this.notifyProgress('获取视频文件...', idx, totalVideos);
+    this.notifyProgress('上传视频中...', idx, totalVideos);
     const file = await this.getVideoFile(videoPath, video.name);
     if (!file) throw new Error('无法获取视频文件');
     step(`视频大小: ${(file.size / 1024 / 1024).toFixed(1)}MB`);
 
-    step('上传视频中...');
-    this.notifyProgress('上传视频中...', idx, totalVideos);
+    // DataTransfer API 注入文件到 input[type="file]（React 不拦截 file input）
     const dataTransfer = new DataTransfer();
     dataTransfer.items.add(new File([file], video.name, { type: 'video/mp4' }));
     uploadInput.files = dataTransfer.files;
@@ -99,103 +78,66 @@ class DouyinPublisher {
     // 并行启动 AI 生成（不阻塞上传等待）
     let aiPromise = null;
     if (settings.autoGenerate) {
-      step('AI 生成文案中（后台并行）...');
       this.notifyProgress('AI 生成文案中...', idx, totalVideos);
       aiPromise = this.generateAIContent(video.name, settings);
     }
 
-    // 动态检测上传完成：轮询发布表单是否出现，最多等60秒
-    step('等待视频上传完成...');
+    // 轮询等待上传完成（contenteditable 出现即表示表单已加载）
     this.notifyProgress('等待视频处理...', idx, totalVideos);
     const uploadOk = await this.waitForUploadComplete(60);
-    if (!uploadOk) step('上传检测超时，尝试继续...');
-    else step('视频上传完成');
-
-    // 等待表单稳定
     await this.delay(1500);
-    step('发布表单已就绪');
 
-    // ── 步骤4: 定时发布 ──
+    // 步骤3: 定时发布
     if (settings.scheduledPublish && settings.scheduleTime) {
-      step('设置定时发布...');
       this.notifyProgress('设置定时发布...', idx, totalVideos);
       await this.setScheduledPublish(settings.scheduleTime);
-      await this.delay(500);
-      step('定时发布设置完成');
     }
 
-    // ── 步骤5: 选择星图任务 ──
+    // 步骤4: 选择星图任务（文件名含"小游戏-"前缀时触发）
     if (taskInfo) {
-      step(`选择星图任务: ${taskInfo.searchTerm}`);
       this.notifyProgress('选择星图任务...', idx, totalVideos);
       const taskOk = await this.selectStarTask(taskInfo.searchTerm);
       step(`星图任务${taskOk ? '选择成功' : '选择失败'}`);
       await this.delay(500);
     }
 
-    // ── 步骤6: 获取 AI 结果 ──
+    // 步骤5: 获取 AI 结果
     let aiContent = { topics: [], description: '' };
     if (settings.autoGenerate && aiPromise) {
-      try {
-        aiContent = await aiPromise;
-        step(`AI 结果: 描述="${aiContent.description?.substring(0,30)}" 话题=${JSON.stringify(aiContent.topics)}`);
-      } catch (e) {
-        step(`AI 生成失败: ${e.message}`);
-      }
+      try { aiContent = await aiPromise; } catch (e) { step(`AI 生成失败: ${e.message}`); }
     }
 
-    // ── 步骤7: 填写描述（带重试） ──
+    // 步骤6: 填写描述
     if (settings.autoGenerate && aiContent.description) {
-      step('填写描述...');
       this.notifyProgress('填写描述文案...', idx, totalVideos);
       let descOk = await this.fillDescription(aiContent.description);
-      if (!descOk) {
-        step('描述填写失败，重试...');
-        await this.delay(500);
-        descOk = await this.fillDescription(aiContent.description);
-      }
-      step(`描述填写${descOk ? '成功' : '失败'}`);
-      await this.delay(500);
+      if (!descOk) { await this.delay(500); descOk = await this.fillDescription(aiContent.description); }
+      if (!descOk) step('描述填写失败');
     }
 
-    // ── 步骤8: 填写话题 ──
+    // 步骤7: 填写话题
     let topicsToFill = [];
     if (settings.autoGenerate && aiContent.topics?.length > 0) {
-      // AI 话题优先
       topicsToFill = aiContent.topics.slice(0, 5);
     } else if (taskInfo) {
-      // 有星图任务但没开 AI → 只填 "#抖音小游戏"
-      topicsToFill = ['#抖音小游戏'];
+      topicsToFill = ['#抖音小游戏']; // 有星图任务但无AI → 固定话题
     } else {
-      // 无任务无 AI → 默认话题
-      topicsToFill = this.defaultTopics;
+      topicsToFill = this.defaultTopics; // 无任务无AI → 默认话题
     }
-
     if (topicsToFill.length > 0) {
-      step(`填写话题: ${topicsToFill.join(', ')}`);
       this.notifyProgress('填写话题标签...', idx, totalVideos);
       let topicOk = await this.fillTopics(topicsToFill);
-      if (!topicOk) {
-        step('话题填写失败，重试...');
-        await this.delay(500);
-        topicOk = await this.fillTopics(topicsToFill);
-      }
-      step(`话题填写${topicOk ? '成功' : '失败'}`);
-      await this.delay(500);
+      if (!topicOk) { await this.delay(500); topicOk = await this.fillTopics(topicsToFill); }
     }
 
-    // ── 步骤9: 点击发布 ──
+    // 步骤8: 点击发布
     await this.delay(500);
-    step('点击发布...');
     this.notifyProgress('点击发布...', idx, totalVideos);
     const publishResult = await this.clickPublish();
-    step(`发布按钮${publishResult ? '已点击' : '点击失败'}`);
+    if (!publishResult) step('发布按钮点击失败');
 
-    // ── 步骤10: 等待发布完成 ──
+    // 步骤9: 通知 background 保存发布记录
     await this.delay(3000);
-    step('发布流程完成');
-
-    // 通知 background 保存发布记录
     chrome.runtime.sendMessage({
       action: 'douyinPublishDone',
       videoName: video.name,
@@ -203,8 +145,6 @@ class DouyinPublisher {
       scheduled: settings.scheduledPublish || false
     }).catch(() => {});
   }
-
-  // ===== 页面等待 =====
 
   async waitForPageReady() {
     return new Promise((resolve) => {
@@ -214,84 +154,48 @@ class DouyinPublisher {
   }
 
   /**
-   * 动态检测上传完成
-   * 轮询 contenteditable / textarea / editor 元素是否出现
-   * 出现即表示上传完成、表单已加载
+   * 轮询等待上传完成：检测 contenteditable / textarea / editor 出现
+   * 这些元素只在视频上传完成、表单加载后才会渲染
    */
   async waitForUploadComplete(maxSeconds) {
     const maxMs = maxSeconds * 1000;
-    const interval = 1000;
     let waited = 0;
-
     while (waited < maxMs) {
       const editors = document.querySelectorAll(
         '[contenteditable="true"], textarea, [class*="editor"], [class*="Editor"], [class*="desc"], [class*="Desc"]'
       );
       for (const el of editors) {
-        if (el.offsetWidth > 0 && el.offsetHeight > 0) {
-          console.log(`[抖音发布助手] 上传完成检测: ${(waited/1000).toFixed(1)}秒`);
-          return true;
-        }
+        if (el.offsetWidth > 0 && el.offsetHeight > 0) return true;
       }
-      await this.delay(interval);
-      waited += interval;
+      await this.delay(1000);
+      waited += 1000;
     }
-    console.log(`[抖音发布助手] 上传检测超时: ${maxSeconds}秒`);
     return false;
   }
 
-  // ===== 上传入口查找 =====
-
   /**
-   * 查找 file input 元素
-   * 优先匹配 accept 含 video 的 input，兜底匹配所有 file input
-   * 每 500ms 重试，最多 10 次
+   * 查找 file input 元素（按优先级匹配 accept 类型）
    */
   async findUploadInput() {
     const selectors = [
       'input[type="file"][accept*="video"]',
       'input[type="file"][accept*=".mp4"]',
       'input[type="file"][accept*=".mov"]',
-      'input[type="file"][accept*=".flv"]',
       'input[type="file"]'
     ];
-
     for (let attempt = 0; attempt < 10; attempt++) {
       for (const selector of selectors) {
-        const inputs = document.querySelectorAll(selector);
-        for (const input of inputs) {
-          if (input && input.type === 'file') {
-            console.log('[抖音发布助手] 找到上传输入框:', selector, 'attempt:', attempt);
-            return input;
-          }
+        for (const input of document.querySelectorAll(selector)) {
+          if (input.type === 'file') return input;
         }
       }
-
-      // 兜底：遍历所有 input
-      const allInputs = document.querySelectorAll('input');
-      for (const input of allInputs) {
-        if (input.type === 'file') {
-          console.log('[抖音发布助手] 通过遍历找到文件输入框');
-          return input;
-        }
-      }
-
       await this.delay(500);
     }
-
-    console.error('[抖音发布助手] 未找到上传入口，页面DOM数量:', document.querySelectorAll('*').length);
     return null;
   }
 
-  // ===== 视频文件获取 =====
-
   async getVideoFile(videoPath, videoName) {
-    const fullPath = videoPath.endsWith('/')
-      ? `${videoPath}${videoName}`
-      : `${videoPath}/${videoName}`;
-
-    console.log('[抖音发布助手] 获取视频文件:', fullPath);
-
+    const fullPath = videoPath.endsWith('/') ? `${videoPath}${videoName}` : `${videoPath}/${videoName}`;
     try {
       const response = await fetch(`http://localhost:3000/api/video/file?path=${encodeURIComponent(fullPath)}`);
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -312,7 +216,6 @@ class DouyinPublisher {
         settings: settings
       }, (response) => {
         if (chrome.runtime.lastError) {
-          console.error('[抖音发布助手] AI生成错误:', chrome.runtime.lastError);
           resolve({ topics: [], description: '', error: chrome.runtime.lastError.message });
         } else {
           resolve(response || { topics: [], description: '' });
@@ -324,35 +227,30 @@ class DouyinPublisher {
   // ===== 描述填写 =====
 
   /**
-   * 查找主编辑器（排除标签输入框）
-   * 策略：找面积最大的 contenteditable，排除 placeholder 含"话题"的
+   * 查找主编辑器：选面积最大的 contenteditable，排除话题/标签输入框
    */
   findMainEditor() {
     const allEditable = document.querySelectorAll('[contenteditable="true"]');
     const candidates = [];
     for (const el of allEditable) {
       if (!this.isElementVisible(el)) continue;
-      const cls = el.className || '';
       const placeholder = el.getAttribute('data-placeholder') || el.getAttribute('placeholder') || '';
-      const rect = el.getBoundingClientRect();
-      const area = rect.width * rect.height;
+      const cls = el.className || '';
       const isTagInput = placeholder.includes('话题') || placeholder.includes('tag') ||
                          placeholder.includes('搜索') || placeholder.includes('Tag') ||
                          cls.includes('tag') || cls.includes('Tag') ||
                          cls.includes('topic') || cls.includes('Topic');
       if (isTagInput) continue;
-      candidates.push({ el, area });
+      const rect = el.getBoundingClientRect();
+      candidates.push({ el, area: rect.width * rect.height });
     }
     candidates.sort((a, b) => b.area - a.area);
     return candidates[0]?.el || null;
   }
 
   async fillDescription(description) {
-    console.log('[抖音发布助手] 尝试填写描述...');
-
     const editor = this.findMainEditor();
     if (editor) {
-      console.log('[抖音发布助手] 找到主编辑器，填写描述');
       editor.focus();
       await this.delay(100);
       editor.click();
@@ -360,24 +258,17 @@ class DouyinPublisher {
       editor.innerHTML = '';
       document.execCommand('insertText', false, description);
       editor.dispatchEvent(new Event('input', { bubbles: true }));
-      editor.dispatchEvent(new Event('change', { bubbles: true }));
-      console.log('[抖音发布助手] 描述填写完成');
       return true;
     }
-
     const textareas = document.querySelectorAll('textarea');
     for (const textarea of textareas) {
       if (this.isElementVisible(textarea)) {
-        console.log('[抖音发布助手] 找到textarea，填写描述');
         textarea.focus();
         textarea.value = description;
         textarea.dispatchEvent(new Event('input', { bubbles: true }));
-        textarea.dispatchEvent(new Event('change', { bubbles: true }));
         return true;
       }
     }
-
-    console.log('[抖音发布助手] 未找到描述输入框');
     return false;
   }
 
@@ -385,8 +276,7 @@ class DouyinPublisher {
 
   /**
    * 查找话题/标签输入框
-   * 优先匹配 placeholder 含"话题""tag""搜索"的元素
-   * 兜底：找最小的 contenteditable
+   * 优先匹配 placeholder 含"话题""tag""#""搜索"的元素，兜底选最小的 contenteditable
    */
   findTagInput() {
     const allEditable = document.querySelectorAll('[contenteditable="true"]');
@@ -394,12 +284,13 @@ class DouyinPublisher {
       if (!this.isElementVisible(el)) continue;
       const cls = el.className || '';
       const placeholder = el.getAttribute('data-placeholder') || el.getAttribute('placeholder') || '';
-      const isTagInput = placeholder.includes('话题') || placeholder.includes('tag') ||
-                         placeholder.includes('搜索') || placeholder.includes('Tag') ||
-                         cls.includes('tag') || cls.includes('Tag') ||
-                         cls.includes('topic') || cls.includes('Topic') ||
-                         placeholder.includes('#');
-      if (isTagInput) return el;
+      if (placeholder.includes('话题') || placeholder.includes('tag') ||
+          placeholder.includes('搜索') || placeholder.includes('Tag') ||
+          cls.includes('tag') || cls.includes('Tag') ||
+          cls.includes('topic') || cls.includes('Topic') ||
+          placeholder.includes('#')) {
+        return el;
+      }
     }
     const all = Array.from(document.querySelectorAll('[contenteditable="true"]'))
       .filter(el => this.isElementVisible(el));
@@ -412,27 +303,19 @@ class DouyinPublisher {
   }
 
   async fillTopics(topics) {
-    console.log('[抖音发布助手] 尝试填写话题:', topics);
     const topicText = topics.map(t => t.startsWith('#') ? t : `#${t}`).join(' ');
-
-    // 先找话题专用输入框
     const tagInput = this.findTagInput();
     if (tagInput) {
-      console.log('[抖音发布助手] 找到话题输入框，填写话题');
       tagInput.focus();
       await this.delay(100);
       tagInput.click();
       await this.delay(100);
       document.execCommand('insertText', false, topicText + ' ');
       tagInput.dispatchEvent(new Event('input', { bubbles: true }));
-      console.log('[抖音发布助手] 话题填写完成');
       return true;
     }
-
-    // 兜底：追加到主编辑器末尾
     const editor = this.findMainEditor();
     if (editor) {
-      console.log('[抖音发布助手] 追加话题到主编辑器末尾');
       editor.focus();
       await this.delay(100);
       const selection = window.getSelection();
@@ -443,15 +326,10 @@ class DouyinPublisher {
       selection.addRange(range);
       document.execCommand('insertText', false, '\n' + topicText + ' ');
       editor.dispatchEvent(new Event('input', { bubbles: true }));
-      console.log('[抖音发布助手] 话题追加完成');
       return true;
     }
-
-    console.log('[抖音发布助手] 未找到填写话题的位置');
     return false;
   }
-
-  // ===== 工具方法 =====
 
   isElementVisible(element) {
     if (!element) return false;
@@ -465,97 +343,52 @@ class DouyinPublisher {
   // ===== 发布按钮 =====
 
   /**
-   * 查找并点击发布按钮
-   * 优先级：发布/发表 > 立即发布 > 含"发布"的其他按钮
-   * 排除：高清、定时相关按钮
+   * 查找并点击发布按钮（优先级：发布 > 立即发布 > 其他含"发布"按钮）
    */
   async clickPublish() {
-    console.log('[抖音发布助手] 查找发布按钮...');
-
     const allButtons = document.querySelectorAll('button');
     const publishButtons = [];
-
     for (const btn of allButtons) {
       const text = (btn.textContent || '').trim();
-
       if (this.isElementVisible(btn) && !btn.disabled) {
-        if (text === '发布' || text === '发表') {
-          publishButtons.push({ btn, text, priority: 1 });
-        } else if (text === '立即发布' || text === '立即发表') {
-          publishButtons.push({ btn, text, priority: 2 });
-        } else if (text.includes('发布') && !text.includes('高清') && !text.includes('定时')) {
-          publishButtons.push({ btn, text, priority: 3 });
-        }
+        if (text === '发布' || text === '发表') publishButtons.push({ btn, priority: 1 });
+        else if (text === '立即发布' || text === '立即发表') publishButtons.push({ btn, priority: 2 });
+        else if (text.includes('发布') && !text.includes('高清') && !text.includes('定时')) publishButtons.push({ btn, priority: 3 });
       }
     }
-
     publishButtons.sort((a, b) => a.priority - b.priority);
-
-    if (publishButtons.length > 0) {
-      const { btn, text } = publishButtons[0];
-      console.log('[抖音发布助手] 找到发布按钮:', text);
-      btn.click();
-      return true;
-    }
-
-    console.log('[抖音发布助手] 未找到合适的发布按钮');
+    if (publishButtons.length > 0) { publishButtons[0].btn.click(); return true; }
     return false;
   }
 
   // ===== 进度通知 =====
 
-  /**
-   * 通知 popup 更新进度条
-   * 同时发送 publishProgress（兼容旧逻辑）和 progressUpdate（popup 进度条）
-   */
   notifyProgress(step, current, total, status) {
     try {
+      chrome.runtime.sendMessage({ action: 'publishProgress', status: step, current, total }).catch(() => {});
       chrome.runtime.sendMessage({
-        action: 'publishProgress',
-        status: step,
-        current, total
+        action: 'progressUpdate', step, detail: status || 'publishing',
+        current, total, videoIndex: current - 1, status: status || 'publishing'
       }).catch(() => {});
-      chrome.runtime.sendMessage({
-        action: 'progressUpdate',
-        step: step,
-        detail: status || 'publishing',
-        current: current,
-        total: total,
-        videoIndex: current - 1,
-        status: status || 'publishing'
-      }).catch(() => {});
-    } catch (e) {
-      console.log('[抖音发布助手] 通知进度失败:', e);
-    }
+    } catch (e) {}
   }
 
   // ===== 定时发布 =====
 
   /**
-   * 查找定时发布选项并设置时间
-   * 1. 找"定时发布"文字，点击其父级开关
-   * 2. 找时间输入框，设置值
+   * 设置定时发布：查找"定时发布"开关 → 开启 → 设置日期时间
+   * 抖音的日期和时间是同一个 input（placeholder="日期和时间"），格式 YYYY-MM-DD HH:MM
    */
   async setScheduledPublish(scheduleTime) {
-    console.log('====== [抖音定时发布 DEBUG] ======');
-    console.log('[抖音定时] 输入 scheduleTime:', scheduleTime);
-
-    // 手动解析时间字符串，避免时区问题
     const parts = scheduleTime.replace('T', ' ').split(' ');
-    const datePart = parts[0];
-    const timePart = parts[1] || '00:00';
-    const [year, month, day] = datePart.split('-');
-    const [hour, minute] = timePart.split(':');
+    const [year, month, day] = parts[0].split('-');
+    const [hour, minute] = (parts[1] || '00:00').split(':');
     const pad = n => String(n).padStart(2, '0');
-    const dateStr = `${year}-${pad(month)}-${pad(day)}`;
-    const timeStr = `${pad(hour)}:${pad(minute)}`;
-    console.log('[抖音定时] 解析结果 - 日期:', dateStr, '时间:', timeStr);
+    const fullDatetime = `${year}-${pad(month)}-${pad(day)} ${pad(hour)}:${pad(minute)}`;
 
-    // 查找定时发布开关
-    const allElements = document.querySelectorAll('*');
+    // 查找"定时发布"开关并点击
     let scheduleToggle = null;
-
-    for (const el of allElements) {
+    for (const el of document.querySelectorAll('*')) {
       if (!this.isElementVisible(el)) continue;
       const text = el.textContent?.trim() || '';
       if (text === '定时发布' || text === '定时' || text === '预约发布') {
@@ -564,8 +397,7 @@ class DouyinPublisher {
           if (target.tagName === 'BUTTON' || target.tagName === 'LABEL' ||
               target.tagName === 'INPUT' || target.getAttribute('role') === 'switch' ||
               target.getAttribute('role') === 'checkbox' || target.onclick) {
-            scheduleToggle = target;
-            break;
+            scheduleToggle = target; break;
           }
           target = target.parentElement;
           if (!target) break;
@@ -574,318 +406,144 @@ class DouyinPublisher {
         break;
       }
     }
-
     if (!scheduleToggle) {
-      const switches = document.querySelectorAll('[role="switch"], [class*="switch"], [class*="Switch"], [class*="toggle"], [class*="Toggle"]');
-      for (const sw of switches) {
+      for (const sw of document.querySelectorAll('[role="switch"], [class*="switch"], [class*="toggle"]')) {
         if (sw.textContent?.includes('定时') || sw.parentElement?.textContent?.includes('定时')) {
-          scheduleToggle = sw;
-          break;
+          scheduleToggle = sw; break;
         }
       }
     }
+    if (!scheduleToggle) return false;
 
-    if (!scheduleToggle) {
-      console.log('[抖音定时] 未找到定时发布选项');
-      console.log('====== DEBUG END ======');
-      return false;
-    }
-
-    console.log('[抖音定时] 找到定时开关，点击开启...');
     scheduleToggle.click();
     await this.delay(1500);
 
-    // dump 所有可见 input 元素
-    const allInputs = document.querySelectorAll('input');
-    console.log('[抖音定时] 页面 input 总数:', allInputs.length);
-    for (const inp of allInputs) {
-      if (!this.isElementVisible(inp)) continue;
-      const rect = inp.getBoundingClientRect();
-      console.log(`[抖音定时]   input type=${inp.type} placeholder="${inp.placeholder}" class="${(inp.className||'').substring(0,80)}" value="${inp.value}" ${Math.round(rect.width)}x${Math.round(rect.height)}`);
-    }
-
-    const fullDatetime = `${dateStr} ${timeStr}`;
-    console.log('[抖音定时] 目标完整日期时间:', fullDatetime);
-    let didSet = false;
-
-    // 策略1: 联合日期时间 input（如 placeholder="日期和时间"），一次性设完整值
-    // 抖音的日期和时间可能是同一个 input，格式 YYYY-MM-DD HH:MM
-    const combinedInputs = document.querySelectorAll('input[placeholder*="日期"]');
-    for (const input of combinedInputs) {
+    // 策略1: 联合日期时间 input（placeholder 含"日期"，值格式含空格分隔的日期时间）
+    for (const input of document.querySelectorAll('input[placeholder*="日期"]')) {
       if (!this.isElementVisible(input)) continue;
       const ph = (input.placeholder || '').toLowerCase();
-      // 同时包含"日期"和"时间"的，或值格式含空格的（如 2026-07-01 20:40），说明是联合 input
-      if (ph.includes('日期') && ph.includes('时间') || (input.value && input.value.includes(' ') && input.value.match(/\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}/))) {
-        console.log('[抖音定时] 发现联合日期时间 input:', input.placeholder, '当前值:', input.value);
-        input.focus();
-        input.click();
-        await this.delay(300);
+      if (ph.includes('日期') && ph.includes('时间') ||
+          (input.value && input.value.includes(' ') && input.value.match(/\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}/))) {
+        input.focus(); input.click(); await this.delay(300);
         const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
         nativeSetter.call(input, fullDatetime);
         input.dispatchEvent(new Event('input', { bubbles: true }));
         input.dispatchEvent(new Event('change', { bubbles: true }));
-        console.log('[抖音定时] 联合设置后 value:', input.value);
-        didSet = true;
-        break;
+        return true;
       }
     }
-    if (didSet) {
-      console.log('[抖音定时] 联合设置成功，跳过分开设置');
-      console.log('====== DEBUG END ======');
-      return true;
-    }
 
-    // 策略2: 分开设置 date 和 time input（兼容旧版抖音）
-    let dateSet = false;
-    const dateInputs = document.querySelectorAll('input[type="date"], input[placeholder*="日期"], input[placeholder*="选择日期"]');
-    for (const input of dateInputs) {
+    // 策略2: 分开设置 date 和 time
+    for (const input of document.querySelectorAll('input[type="date"], input[placeholder*="日期"], input[placeholder*="选择日期"]')) {
       if (!this.isElementVisible(input)) continue;
-      console.log('[抖音定时] 设置日期:', dateStr, '到', input.type, input.placeholder);
-      input.focus();
-      input.click();
-      await this.delay(300);
+      input.focus(); input.click(); await this.delay(300);
       const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-      nativeSetter.call(input, dateStr);
+      nativeSetter.call(input, `${year}-${pad(month)}-${pad(day)}`);
       input.dispatchEvent(new Event('input', { bubbles: true }));
       input.dispatchEvent(new Event('change', { bubbles: true }));
-      console.log('[抖音定时] 日期设置后 value:', input.value);
-      dateSet = true;
       break;
     }
-    if (!dateSet) console.log('[抖音定时] 未找到日期输入框');
-
-    let timeSet = false;
-    const timeInputs = document.querySelectorAll('input[type="time"], input[type="datetime-local"], input[placeholder*="时间"], input[placeholder*="选择"]');
-    for (const input of timeInputs) {
+    for (const input of document.querySelectorAll('input[type="time"], input[type="datetime-local"], input[placeholder*="时间"], input[placeholder*="选择"]')) {
       if (!this.isElementVisible(input)) continue;
-      const val = input.type === 'datetime-local' ? `${dateStr}T${timeStr}` : timeStr;
-      console.log('[抖音定时] 设置时间:', val, '到', input.type, input.placeholder);
-      input.focus();
-      input.click();
-      await this.delay(300);
+      const val = input.type === 'datetime-local' ? `${year}-${pad(month)}-${pad(day)}T${pad(hour)}:${pad(minute)}` : `${pad(hour)}:${pad(minute)}`;
+      input.focus(); input.click(); await this.delay(300);
       const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
       nativeSetter.call(input, val);
       input.dispatchEvent(new Event('input', { bubbles: true }));
       input.dispatchEvent(new Event('change', { bubbles: true }));
-      console.log('[抖音定时] 时间设置后 value:', input.value);
-      timeSet = true;
       break;
     }
-    if (!timeSet) {
-      const pickerInputs = document.querySelectorAll('[class*="picker"] input, [class*="Picker"] input, [class*="calendar"] input');
-      for (const input of pickerInputs) {
-        if (!this.isElementVisible(input)) continue;
-        const dateTimeStr = `${dateStr} ${timeStr}`;
-        console.log('[抖音定时] 设置 picker:', dateTimeStr);
-        input.focus();
-        input.click();
-        await this.delay(300);
-        const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-        nativeSetter.call(input, dateTimeStr);
-        input.dispatchEvent(new Event('input', { bubbles: true }));
-        input.dispatchEvent(new Event('change', { bubbles: true }));
-        console.log('[抖音定时] picker 设置后 value:', input.value);
-        timeSet = true;
-        break;
-      }
-    }
-
-    console.log('[抖音定时] 日期设置:', dateSet ? '成功' : '失败', '时间设置:', timeSet ? '成功' : '失败');
-    console.log('====== DEBUG END ======');
-    return dateSet || timeSet;
+    return true;
   }
 
   // ===== 星图任务 =====
 
   /**
-   * 从文件名解析星图任务信息
-   * 匹配 "小游戏-xxx" 格式，提取 xxx 作为活动任务名
-   * 如果 xxx 以"推广"结尾，搜索时去掉"推广"
+   * 从文件名解析星图任务：匹配 "小游戏-xxx" 格式，去尾"推广"
    */
   parseTaskFromName(fileName) {
     const match = fileName.match(/^小游戏-(.+)/);
     if (!match) return null;
-    const activityName = match[1].replace(/\.[^.]+$/, ''); // 去掉扩展名
-    // 搜索关键词：去掉末尾的"推广"
+    const activityName = match[1].replace(/\.[^.]+$/, '');
     const searchTerm = activityName.replace(/推广$/, '').trim();
     if (!searchTerm) return null;
-    console.log(`[抖音发布助手] 解析任务: "${activityName}" → 搜索: "${searchTerm}"`);
     return { activityName, searchTerm };
   }
 
   /**
-   * 选择抖音星图任务
-   * 1. 找到"星图任务"按钮并点击
-   * 2. 在弹窗搜索框中输入任务名
-   * 3. 等待列表刷新，选择匹配项
-   * 4. 点击确认按钮
+   * 选择抖音星图任务（已验证可用的方法）
+   *
+   * 流程：
+   * 1. 渐进式滚动页面触发 React 懒加载 → 找到"请选择星图任务"按钮
+   * 2. reactClick 点击按钮 → 等待弹窗 + 搜索框出现
+   * 3. 在搜索框中逐字符输入任务名（React 受控 input 需要 InputEvent）
+   * 4. 等待搜索结果加载 → 在匹配行内找到 radio/circle 选择控件并点击
+   * 5. 点击弹窗中的"确定"按钮
+   *
+   * 关键技术：
+   * - React 懒加载：星图区域在页面底部，必须渐进式滚动触发渲染
+   * - React onClick：原生 .click() 无效，必须通过 fiber 树找到 onClick 函数直接调用
+   * - 搜索结果选择：选择控件（圆形 radio）在任务描述文字前面，需排除 modal 容器
    */
   async selectStarTask(searchTerm) {
-    console.log('====== [星图任务 DEBUG] ======');
-    console.log('[星图] 搜索词:', searchTerm);
-
-    // 步骤0: 渐进式滚动，每滚一段检查一次按钮是否出现
-    console.log('[星图] === 步骤0: 渐进式滚动触发渲染 ===');
+    // 步骤0: 渐进式滚动触发 React 懒加载，同时尝试查找按钮
     let starBtn = null;
     const pageHeight = document.body.scrollHeight;
     const viewportH = window.innerHeight;
-    // 从当前位置开始，每次向下滚一个视窗高度，最多滚10次
-    for (let scrollRound = 0; scrollRound < 10; scrollRound++) {
-      const scrollTarget = Math.min((scrollRound + 1) * viewportH, pageHeight);
-      console.log(`[星图] 滚动到 y=${scrollRound + 1}/${Math.ceil(pageHeight / viewportH)}`);
-      window.scrollTo({ top: scrollTarget, behavior: 'instant' });
+    for (let round = 0; round < 10; round++) {
+      window.scrollTo({ top: Math.min((round + 1) * viewportH, pageHeight), behavior: 'instant' });
       await this.delay(800);
 
-      // 每次滚动后立即尝试查找按钮
-      // 策略1: class 含 star-btn
       starBtn = document.querySelector('[class*="star-btn"]');
-      if (starBtn) { console.log(`[星图] 策略1命中(class) scrollRound=${scrollRound}`); break; }
-      // 策略2: 文本精确匹配
+      if (starBtn) break;
       for (const el of document.querySelectorAll('span, div')) {
-        if (el.textContent && el.textContent.trim() === '请选择星图任务' && this.isElementVisible(el)) {
-          starBtn = el;
-          console.log(`[星图] 策略2命中(文本) scrollRound=${scrollRound}`);
-          break;
-        }
+        if (el.textContent?.trim() === '请选择星图任务' && this.isElementVisible(el)) { starBtn = el; break; }
       }
       if (starBtn) break;
-      // 策略3: class 含 star 且包含星图文本
-      for (const el of document.querySelectorAll('[class*="star"], [class*="activity"]')) {
-        if (!this.isElementVisible(el)) continue;
-        const text = (el.textContent || '').trim();
-        if (text.includes('星图') && text.length < 100) {
-          const r = el.getBoundingClientRect();
-          if (r.width > 50 && r.height > 10) {
-            starBtn = el;
-            console.log(`[星图] 策略3命中(star+文本) scrollRound=${scrollRound}`);
-            break;
-          }
-        }
+      for (const el of document.querySelectorAll('[class*="star"]')) {
+        if (this.isElementVisible(el) && (el.textContent || '').includes('星图') && el.getBoundingClientRect().width > 50) { starBtn = el; break; }
       }
       if (starBtn) break;
     }
 
-    // 步骤1: 滚动完毕后，额外等待 + 最后一轮重试
+    // 滚动后额外等待 + 重试（React 渲染可能滞后）
     if (!starBtn) {
-      console.log('[星图] === 步骤1: 滚动完毕后额外重试 ===');
-      // 额外等待 2 秒让 React 渲染稳定
       await this.delay(2000);
-      for (let attempt = 0; attempt < 5; attempt++) {
+      for (let i = 0; i < 5; i++) {
         starBtn = document.querySelector('[class*="star-btn"]');
-        if (starBtn) { console.log(`[星图] 重试命中(class) attempt=${attempt}`); break; }
-        const allEls = document.querySelectorAll('span, div');
-        for (const el of allEls) {
-          if (!this.isElementVisible(el)) continue;
-          if ((el.textContent || '').trim() === '请选择星图任务') {
-            starBtn = el;
-            console.log(`[星图] 重试命中(文本) attempt=${attempt}`);
-            break;
-          }
+        if (starBtn) break;
+        for (const el of document.querySelectorAll('span, div')) {
+          if (el.textContent?.trim() === '请选择星图任务' && this.isElementVisible(el)) { starBtn = el; break; }
         }
         if (starBtn) break;
-        console.log(`[星图] attempt ${attempt}: 未找到按钮，等待重试...`);
         await this.delay(1000);
       }
     }
+    if (!starBtn) return false;
 
-    if (!starBtn) {
-      // 最终 dump：列出所有含"星图"或"任务"的可见元素（不过滤 children 数量）
-      console.log('[星图] === 最终dump: 所有含星图/任务/星的可见元素 ===');
-      const dumpEls = document.querySelectorAll('*');
-      for (const el of dumpEls) {
-        if (!this.isElementVisible(el)) continue;
-        const text = (el.textContent || '').trim();
-        if (text.length > 0 && text.length < 200) {
-          if (text.includes('星图') || text.includes('星图任务') || text.includes('请选择') || text.includes('活动任务')) {
-            const r = el.getBoundingClientRect();
-            if (r.width > 20) {
-              console.log(`[星图] DUMP <${el.tagName}> "${text.substring(0,80)}" class="${(el.className||'').substring(0,60)}" ${Math.round(r.width)}x${Math.round(r.height)} @(${Math.round(r.x)},${Math.round(r.y)})`);
-            }
-          }
-        }
-      }
-      // 也列出所有含 star 但无星图文本的元素
-      for (const el of document.querySelectorAll('[class*="star"], [class*="activity"]')) {
-        if (!this.isElementVisible(el)) continue;
-        const r = el.getBoundingClientRect();
-        if (r.width > 20) {
-          console.log(`[星图] STAR-CLASS <${el.tagName}> text="${(el.textContent||'').substring(0,60)}" class="${(el.className||'').substring(0,60)}" ${Math.round(r.width)}x${Math.round(r.height)}`);
-        }
-      }
-      console.log('[星图] 未找到星图任务按钮');
-      console.log('====== [星图 DEBUG END] ======');
-      return false;
-    }
-
-    const btnInfo = { tag: starBtn.tagName, text: (starBtn.textContent||'').substring(0,40), cls: (starBtn.className||'').substring(0,80) };
-    console.log('[星图] 找到按钮:', JSON.stringify(btnInfo));
-    console.log('[星图] 点击按钮...');
+    // 点击星图任务按钮（必须用 reactClick 触发 React 合成事件）
     starBtn.scrollIntoView({ behavior: 'smooth', block: 'center' });
     await this.delay(500);
-    starBtn.click();
+    this.reactClick(starBtn);
     await this.delay(2000);
 
-    // 步骤2: 等待并 dump 弹窗
-    console.log('[星图] === 步骤2: 等待弹窗出现 ===');
-
-    for (let wait = 0; wait < 3; wait++) {
-      // dump 星图相关容器的完整 DOM 结构（最多3层子元素）
-      const starContainers = document.querySelectorAll('[class*="star"], [class*="mention"], [class*="bg-"]');
-      for (const container of starContainers) {
-        if (!this.isElementVisible(container)) continue;
-        const r = container.getBoundingClientRect();
-        if (r.width < 50 || r.height < 50) continue;
-        console.log(`[星图] 容器: <${container.tagName}> class="${(container.className||'').substring(0,80)}" ${Math.round(r.width)}x${Math.round(r.height)} @(${Math.round(r.x)},${Math.round(r.y)})`);
-        // dump 直接子元素
-        for (const child of container.children) {
-          if (!this.isElementVisible(child)) {
-            console.log(`[星图]   隐藏子: <${child.tagName}> class="${(child.className||'').substring(0,60)}" display=${window.getComputedStyle(child).display}`);
-            continue;
-          }
-          const cr = child.getBoundingClientRect();
-          const childText = (child.textContent || '').trim().substring(0, 60);
-          console.log(`[星图]   子: <${child.tagName}> "${childText}" class="${(child.className||'').substring(0,60)}" ${Math.round(cr.width)}x${Math.round(cr.height)}`);
-          // dump 2层子元素
-          for (const gc of child.children) {
-            if (!this.isElementVisible(gc)) continue;
-            const gcr = gc.getBoundingClientRect();
-            const gcText = (gc.textContent || '').trim().substring(0, 60);
-            console.log(`[星图]     孙: <${gc.tagName}> "${gcText}" class="${(gc.className||'').substring(0,60)}" ${Math.round(gcr.width)}x${Math.round(gcr.height)}`);
-          }
-        }
-      }
-      if (wait < 2) await this.delay(1000);
-    }
-
-    // 步骤3: 查找搜索框（带重试）
-    console.log('[星图] === 步骤3: 查找搜索框 ===');
+    // 步骤3: 查找搜索框（placeholder 含"任务"/"搜索"）
     let searchInput = null;
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const inputs = document.querySelectorAll('input[type="text"], input:not([type])');
-      for (const inp of inputs) {
+    for (let i = 0; i < 3; i++) {
+      for (const inp of document.querySelectorAll('input[type="text"], input:not([type])')) {
         if (!this.isElementVisible(inp)) continue;
         const ph = (inp.placeholder || '').toLowerCase();
-        if (ph.includes('搜索') || ph.includes('任务') || ph.includes('search') || ph.includes('查找')) {
-          searchInput = inp;
-          console.log('[星图] 匹配搜索框:', inp.placeholder);
-          break;
+        if (ph.includes('搜索') || ph.includes('任务') || ph.includes('search')) {
+          searchInput = inp; break;
         }
       }
       if (searchInput) break;
-      console.log(`[星图] 第${attempt + 1}次未找到搜索框，等待1秒重试...`);
       await this.delay(1000);
     }
+    if (!searchInput) return false;
 
-    if (!searchInput) {
-      console.log('[星图] 未找到搜索框，跳过');
-      console.log('====== [星图 DEBUG END] ======');
-      return false;
-    }
-
-    // 步骤4: 输入搜索词
-    console.log('[星图] === 步骤4: 输入搜索词 ===');
-    searchInput.focus();
-    await this.delay(300);
+    // 步骤4: 逐字符输入搜索词（React 受控 input 需要 InputEvent）
+    searchInput.focus(); await this.delay(300);
     searchInput.value = '';
     searchInput.dispatchEvent(new Event('input', { bubbles: true }));
     await this.delay(200);
@@ -895,65 +553,97 @@ class DouyinPublisher {
       await this.delay(100);
     }
     searchInput.dispatchEvent(new Event('change', { bubbles: true }));
-    console.log('[星图] 输入完成:', searchInput.value);
-    await this.delay(3000);
 
-    // 步骤5: 选择任务
-    console.log('[星图] === 步骤5: 选择任务 ===');
+    // 步骤5: 等待搜索结果加载（检测 loading 指示器消失）
+    await this.delay(2000);
+    for (let w = 0; w < 5; w++) {
+      const loading = document.querySelector('[class*="loading"], [class*="skeleton"], [class*="spinner"]');
+      if (!loading || !this.isElementVisible(loading)) break;
+      await this.delay(1000);
+    }
+    await this.delay(1500);
+
+    // 步骤6: 在匹配行中找到 radio/circle 选择控件并点击
     let selected = false;
-    const clickables = document.querySelectorAll('[class*="option"], [class*="item"], [class*="task"], li, [role="option"]');
-    for (const item of clickables) {
+    const excludeClass = ['semi-modal', 'modal', 'drawer', 'popover', 'popup'];
+    for (const item of document.querySelectorAll('div, span, li, label')) {
       if (!this.isElementVisible(item)) continue;
-      const text = (item.textContent || '').trim();
-      if (text.includes(searchTerm)) {
-        console.log('[星图] 匹配选择:', text.substring(0,50));
-        item.click();
-        selected = true;
-        break;
-      }
-    }
-    if (!selected) {
-      const allDivs = document.querySelectorAll('div, span');
-      for (const el of allDivs) {
-        if (!this.isElementVisible(el)) continue;
-        const r = el.getBoundingClientRect();
-        if (r.width === 0 || r.height === 0 || r.height > 60) continue;
-        const text = (el.textContent || '').trim();
-        if (text.includes(searchTerm) && text.length < 80 && el.children.length <= 3) {
-          console.log('[星图] 模糊匹配:', text.substring(0,50));
-          el.click();
-          selected = true;
-          break;
-        }
-      }
-    }
+      if (excludeClass.some(ex => (item.className || '').toLowerCase().includes(ex))) continue;
+      const r = item.getBoundingClientRect();
+      if (r.width < 30 || r.height < 10 || r.height > 200) continue;
+      if (!(item.textContent || '').includes(searchTerm)) continue;
+      if ((item.textContent || '').trim().length > 150) continue;
 
-    if (!selected) {
-      console.log('[星图] 未找到匹配任务');
-      console.log('====== [星图 DEBUG END] ======');
-      return false;
+      // 在匹配行内查找选择控件：radio/circle/checkbox
+      let ctrl = item.querySelector(
+        'input[type="radio"], input[type="checkbox"], ' +
+        '[class*="radio"], [class*="circle"], [class*="check"], [class*="Radio"], [class*="Check"]'
+      );
+      if (!ctrl && item.previousElementSibling) {
+        const prevCls = (item.previousElementSibling.className || '').toLowerCase();
+        if (prevCls.includes('radio') || prevCls.includes('circle') || prevCls.includes('check')) ctrl = item.previousElementSibling;
+      }
+      if (!ctrl) {
+        const parent = item.parentElement;
+        if (parent) ctrl = parent.querySelector('input[type="radio"], [class*="radio"], [class*="circle"], [class*="Radio"]');
+      }
+      if (ctrl) { this.reactClick(ctrl); selected = true; break; }
+
+      // 回退：遍历所有 radio 元素，检查其容器是否含搜索词
+      for (const radio of document.querySelectorAll('[class*="radio"], [class*="circle"], input[type="radio"]')) {
+        if (!this.isElementVisible(radio)) continue;
+        const rr = radio.getBoundingClientRect();
+        if (rr.width < 10 || rr.width > 80) continue;
+        const container = radio.closest('[class*="item"], [class*="row"], [class*="task"], li') || radio.parentElement;
+        if (container && (container.textContent || '').includes(searchTerm)) { this.reactClick(radio); selected = true; break; }
+      }
+      if (selected) break;
+
+      // 最终回退：点击整行
+      this.reactClick(item); selected = true; break;
     }
+    if (!selected) return false;
     await this.delay(1000);
 
-    // 步骤6: 确认
-    console.log('[星图] === 步骤6: 确认按钮 ===');
-    const confirmBtns = document.querySelectorAll('button');
-    for (const btn of confirmBtns) {
+    // 步骤7: 点击确认按钮
+    for (const btn of document.querySelectorAll('button')) {
       if (!this.isElementVisible(btn)) continue;
       const text = (btn.textContent || '').trim();
-      if (text === '确认' || text === '确定' || text === '完成' ||
-          text.includes('确认') || text.includes('确定')) {
-        console.log('[星图] 点击确认:', text);
-        btn.click();
+      if (text === '确认' || text === '确定' || text === '完成' || text.includes('确认') || text.includes('确定')) {
+        this.reactClick(btn);
         await this.delay(1000);
-        console.log('====== [星图 DEBUG END] ======');
         return true;
       }
     }
+    return true;
+  }
 
-    // 如果没有明确的确认按钮，可能选择了就自动关闭
-    console.log('[星图] 未找到确认按钮，可能已自动选择');
-    console.log('====== [星图 DEBUG END] ======');
+  /**
+   * 可靠的 React 元素点击
+   * React 通过事件委托在根节点监听，原生 .click() 可能无法触发 onClick
+   * 解决方案：
+   *   1. 遍历 React fiber 树找到 memoizedProps.onClick 直接调用
+   *   2. 回退：派发完整 PointerEvent + MouseEvent 序列
+   */
+  reactClick(el) {
+    if (!el) return false;
+    const fiberKey = Object.keys(el).find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
+    if (fiberKey) {
+      let fiber = el[fiberKey];
+      for (let depth = 0; depth < 10 && fiber; depth++) {
+        const props = fiber.memoizedProps || fiber.pendingProps;
+        if (props && typeof props.onClick === 'function') {
+          props.onClick({ target: el, currentTarget: el, preventDefault() {}, stopPropagation() {}, nativeEvent: new MouseEvent('click') });
+          return true;
+        }
+        fiber = fiber.return;
+      }
+    }
+    const rect = el.getBoundingClientRect();
+    const opts = { bubbles: true, cancelable: true, view: window, clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2 };
+    el.dispatchEvent(new PointerEvent('pointerdown', opts));
+    el.dispatchEvent(new PointerEvent('pointerup', opts));
+    el.dispatchEvent(new MouseEvent('click', opts));
     return true;
   }
 
@@ -962,5 +652,4 @@ class DouyinPublisher {
   }
 }
 
-console.log('[抖音发布助手] 脚本加载');
 const publisher = new DouyinPublisher();
