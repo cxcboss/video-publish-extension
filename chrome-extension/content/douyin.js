@@ -21,6 +21,7 @@
 class DouyinPublisher {
   constructor() {
     this.isReady = false;
+    this.defaultTopics = ['#动画', '#奇葩游戏', '#游戏视频', '#小游戏', '#休闲游戏'];
     this.init();
   }
 
@@ -65,6 +66,12 @@ class DouyinPublisher {
     await this.waitForPageReady();
     await this.delay(1500);
     step('页面加载完成');
+
+    // ── 解析文件名，提取活动任务名 ──
+    const taskInfo = this.parseTaskFromName(video.name);
+    if (taskInfo) {
+      step(`检测到星图任务: ${taskInfo.searchTerm} (原始: ${taskInfo.activityName})`);
+    }
 
     // ── 步骤2: 查找上传入口 ──
     step('查找上传入口...');
@@ -117,7 +124,16 @@ class DouyinPublisher {
       step('定时发布设置完成');
     }
 
-    // ── 步骤5: 获取 AI 结果 ──
+    // ── 步骤5: 选择星图任务 ──
+    if (taskInfo) {
+      step(`选择星图任务: ${taskInfo.searchTerm}`);
+      this.notifyProgress('选择星图任务...', idx, totalVideos);
+      const taskOk = await this.selectStarTask(taskInfo.searchTerm);
+      step(`星图任务${taskOk ? '选择成功' : '选择失败'}`);
+      await this.delay(500);
+    }
+
+    // ── 步骤6: 获取 AI 结果 ──
     let aiContent = { topics: [], description: '' };
     if (settings.autoGenerate && aiPromise) {
       try {
@@ -128,7 +144,7 @@ class DouyinPublisher {
       }
     }
 
-    // ── 步骤6: 填写描述（带重试） ──
+    // ── 步骤7: 填写描述（带重试） ──
     if (settings.autoGenerate && aiContent.description) {
       step('填写描述...');
       this.notifyProgress('填写描述文案...', idx, totalVideos);
@@ -142,29 +158,40 @@ class DouyinPublisher {
       await this.delay(500);
     }
 
-    // ── 步骤7: 填写话题（最多5个，带重试） ──
+    // ── 步骤8: 填写话题 ──
+    let topicsToFill = [];
     if (settings.autoGenerate && aiContent.topics?.length > 0) {
-      const topics = aiContent.topics.slice(0, 5);
-      step(`填写话题: ${topics.join(', ')}`);
+      // AI 话题优先
+      topicsToFill = aiContent.topics.slice(0, 5);
+    } else if (taskInfo) {
+      // 有星图任务但没开 AI → 只填 "#抖音小游戏"
+      topicsToFill = ['#抖音小游戏'];
+    } else {
+      // 无任务无 AI → 默认话题
+      topicsToFill = this.defaultTopics;
+    }
+
+    if (topicsToFill.length > 0) {
+      step(`填写话题: ${topicsToFill.join(', ')}`);
       this.notifyProgress('填写话题标签...', idx, totalVideos);
-      let topicOk = await this.fillTopics(topics);
+      let topicOk = await this.fillTopics(topicsToFill);
       if (!topicOk) {
         step('话题填写失败，重试...');
         await this.delay(500);
-        topicOk = await this.fillTopics(topics);
+        topicOk = await this.fillTopics(topicsToFill);
       }
       step(`话题填写${topicOk ? '成功' : '失败'}`);
       await this.delay(500);
     }
 
-    // ── 步骤8: 点击发布 ──
+    // ── 步骤9: 点击发布 ──
     await this.delay(500);
     step('点击发布...');
     this.notifyProgress('点击发布...', idx, totalVideos);
     const publishResult = await this.clickPublish();
     step(`发布按钮${publishResult ? '已点击' : '点击失败'}`);
 
-    // ── 步骤9: 等待发布完成 ──
+    // ── 步骤10: 等待发布完成 ──
     await this.delay(3000);
     step('发布流程完成');
 
@@ -666,6 +693,188 @@ class DouyinPublisher {
     console.log('[抖音定时] 日期设置:', dateSet ? '成功' : '失败', '时间设置:', timeSet ? '成功' : '失败');
     console.log('====== DEBUG END ======');
     return dateSet || timeSet;
+  }
+
+  // ===== 星图任务 =====
+
+  /**
+   * 从文件名解析星图任务信息
+   * 匹配 "小游戏-xxx" 格式，提取 xxx 作为活动任务名
+   * 如果 xxx 以"推广"结尾，搜索时去掉"推广"
+   */
+  parseTaskFromName(fileName) {
+    const match = fileName.match(/^小游戏-(.+)/);
+    if (!match) return null;
+    const activityName = match[1].replace(/\.[^.]+$/, ''); // 去掉扩展名
+    // 搜索关键词：去掉末尾的"推广"
+    const searchTerm = activityName.replace(/推广$/, '').trim();
+    if (!searchTerm) return null;
+    console.log(`[抖音发布助手] 解析任务: "${activityName}" → 搜索: "${searchTerm}"`);
+    return { activityName, searchTerm };
+  }
+
+  /**
+   * 选择抖音星图任务
+   * 1. 找到"星图任务"按钮并点击
+   * 2. 在弹窗搜索框中输入任务名
+   * 3. 等待列表刷新，选择匹配项
+   * 4. 点击确认按钮
+   */
+  async selectStarTask(searchTerm) {
+    console.log('[抖音发布助手] 开始选择星图任务:', searchTerm);
+
+    // 步骤1: 找到"星图任务"按钮
+    let starBtn = null;
+    const allElements = document.querySelectorAll('*');
+    for (const el of allElements) {
+      if (!this.isElementVisible(el)) continue;
+      const text = (el.textContent || '').trim();
+      if (text === '星图任务' || text === '关联星图任务') {
+        // 向上找可点击的父级
+        let target = el;
+        for (let i = 0; i < 5; i++) {
+          if (target.tagName === 'BUTTON' || target.tagName === 'LABEL' ||
+              target.onclick || target.getAttribute('role') === 'button') {
+            starBtn = target;
+            break;
+          }
+          target = target.parentElement;
+          if (!target) break;
+        }
+        if (!starBtn) starBtn = el;
+        break;
+      }
+    }
+
+    if (!starBtn) {
+      console.log('[抖音发布助手] 未找到星图任务按钮，跳过');
+      return false;
+    }
+
+    console.log('[抖音发布助手] 点击星图任务按钮...');
+    starBtn.click();
+    await this.delay(2000);
+
+    // 步骤2: 找到弹窗中的搜索框
+    let searchInput = null;
+    // 通常弹窗中会有 placeholder 含"搜索"的 input
+    const inputs = document.querySelectorAll('input[type="text"], input:not([type])');
+    for (const inp of inputs) {
+      if (!this.isElementVisible(inp)) continue;
+      const ph = (inp.placeholder || '').toLowerCase();
+      if (ph.includes('搜索') || ph.includes('任务') || ph.includes('search')) {
+        searchInput = inp;
+        break;
+      }
+    }
+
+    if (!searchInput) {
+      // 兜底：找弹窗内最小的可见 input
+      const allInputs = document.querySelectorAll('input');
+      let best = null;
+      let bestArea = Infinity;
+      for (const inp of allInputs) {
+        if (!this.isElementVisible(inp)) continue;
+        if (inp.type === 'hidden' || inp.type === 'checkbox' || inp.type === 'radio') continue;
+        const r = inp.getBoundingClientRect();
+        if (r.width > 30 && r.width < 500) {
+          const area = r.width * r.height;
+          if (area < bestArea) {
+            best = inp;
+            bestArea = area;
+          }
+        }
+      }
+      searchInput = best;
+    }
+
+    if (!searchInput) {
+      console.log('[抖音发布助手] 未找到星图任务搜索框');
+      return false;
+    }
+
+    // 步骤3: 逐字输入搜索词
+    console.log('[抖音发布助手] 输入搜索词:', searchTerm);
+    searchInput.focus();
+    await this.delay(300);
+    searchInput.value = '';
+    searchInput.dispatchEvent(new Event('input', { bubbles: true }));
+    await this.delay(200);
+    for (const char of searchTerm) {
+      searchInput.value += char;
+      searchInput.dispatchEvent(new InputEvent('input', { bubbles: true, data: char, inputType: 'insertText' }));
+      await this.delay(100);
+    }
+    searchInput.dispatchEvent(new Event('change', { bubbles: true }));
+    console.log('[抖音发布助手] 搜索词输入完成，等待列表刷新...');
+    await this.delay(2000);
+
+    // 步骤4: 选择匹配的任务
+    let selected = false;
+    // 尝试找包含任务名的列表项
+    const clickables = document.querySelectorAll('[class*="option"], [class*="item"], [class*="list"], li, [role="option"]');
+    for (const item of clickables) {
+      if (!this.isElementVisible(item)) continue;
+      const text = (item.textContent || '').trim();
+      if (text.includes(searchTerm) || text.includes('任务')) {
+        console.log('[抖音发布助手] 找到匹配任务:', text.substring(0, 50));
+        item.click();
+        selected = true;
+        break;
+      }
+    }
+
+    // 兜底：模糊匹配
+    if (!selected) {
+      const allDivs = document.querySelectorAll('div, span, a');
+      for (const el of allDivs) {
+        if (!this.isElementVisible(el)) continue;
+        const r = el.getBoundingClientRect();
+        if (r.width === 0 || r.height === 0 || r.height > 80) continue;
+        const text = (el.textContent || '').trim();
+        if (text.includes(searchTerm) && text.length < 80 && el.children.length <= 3) {
+          console.log('[抖音发布助手] 模糊匹配到:', text.substring(0, 50));
+          el.click();
+          selected = true;
+          break;
+        }
+      }
+    }
+
+    if (!selected) {
+      console.log('[抖音发布助手] 未找到匹配的任务选项');
+      return false;
+    }
+
+    await this.delay(1000);
+
+    // 步骤5: 点击确认按钮
+    const confirmBtns = document.querySelectorAll('button');
+    for (const btn of confirmBtns) {
+      if (!this.isElementVisible(btn)) continue;
+      const text = (btn.textContent || '').trim();
+      if (text === '确认' || text === '确定' || text === '完成') {
+        console.log('[抖音发布助手] 点击确认:', text);
+        btn.click();
+        await this.delay(1000);
+        return true;
+      }
+    }
+
+    // 兜底：按优先级找
+    for (const btn of confirmBtns) {
+      if (!this.isElementVisible(btn)) continue;
+      const text = (btn.textContent || '').trim();
+      if (text.includes('确认') || text.includes('确定') || text.includes('完成')) {
+        console.log('[抖音发布助手] 模糊点击确认:', text);
+        btn.click();
+        await this.delay(1000);
+        return true;
+      }
+    }
+
+    console.log('[抖音发布助手] 未找到确认按钮');
+    return false;
   }
 
   delay(ms) {
