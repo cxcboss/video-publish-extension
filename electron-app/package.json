@@ -1,6 +1,6 @@
 {
   "name": "video-publisher-app",
-  "version": "2.3.3",
+  "version": "2.3.4",
   "description": "AI 视频发布助手 - 桌面管理工具",
   "main": "main.js",
   "scripts": {

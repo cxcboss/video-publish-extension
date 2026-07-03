@@ -10,7 +10,6 @@
   <div class="app">
     <header>
       <h1>AI 视频发布助手</h1>
-      <span class="version" id="version">v2.3.2</span>
     </header>
 
     <!-- 服务状态 -->
@@ -27,27 +26,33 @@
         <button id="start-btn" class="btn">启动服务</button>
         <button id="stop-btn" class="btn btn-outline">停止</button>
       </div>
-      <div class="hint">端口: 3000 | 用于插件读取本地视频文件</div>
     </section>
 
     <!-- 环境安装 -->
     <section class="card">
-      <div class="card-header">
-        <span>环境配置</span>
-      </div>
+      <div class="card-header"><span>环境配置</span></div>
+      <div id="env-status" class="env-status">检测中...</div>
       <div class="install-actions">
-        <button id="install-deps-btn" class="btn">一键安装环境</button>
-        <button id="install-ext-btn" class="btn btn-primary">安装浏览器插件</button>
+        <button id="install-deps-btn" class="btn">安装环境</button>
       </div>
       <div id="install-log" class="install-log hidden"></div>
-      <div id="install-guide" class="install-guide hidden">
-        <div class="guide-title">插件安装教程</div>
+    </section>
+
+    <!-- 浏览器插件 -->
+    <section class="card">
+      <div class="card-header"><span>浏览器插件</span></div>
+      <div id="ext-status" class="env-status">检测中...</div>
+      <div class="install-actions">
+        <button id="install-ext-btn" class="btn btn-primary">安装插件</button>
+      </div>
+      <div id="ext-install-log" class="install-log hidden"></div>
+      <div id="install-guide">
+        <div class="guide-title">Chrome 安装教程</div>
         <ol class="guide-steps">
-          <li>打开 Chrome 浏览器，地址栏输入 <code>chrome://extensions</code></li>
+          <li>打开 Chrome，地址栏输入 <code>chrome://extensions</code></li>
           <li>右上角打开「开发者模式」开关</li>
-          <li>点击「加载已解压的扩展程序」按钮</li>
-          <li>选择文件夹：<code id="ext-install-path"></code></li>
-          <li>插件安装完成，点击工具栏图标使用</li>
+          <li>点击「加载已解压的扩展程序」</li>
+          <li>选择文件夹：<code id="ext-install-path">...</code></li>
         </ol>
         <button id="open-ext-dir-btn" class="btn btn-outline">打开插件目录</button>
         <button id="open-ext-page-btn" class="btn btn-outline">打开扩展管理页</button>
@@ -60,119 +65,129 @@
         <span>插件更新</span>
         <button id="check-update-btn" class="icon-btn" title="检测更新">↻</button>
       </div>
-      <div id="update-status" class="update-status">点击检测按钮检查更新</div>
+      <div id="update-status" class="update-status">点击 ↻ 检测更新</div>
       <div id="update-info" class="hidden">
         <div class="update-version" id="update-version"></div>
         <div class="update-changelog" id="update-changelog"></div>
-        <button id="update-btn" class="btn btn-primary">更新插件</button>
+        <button id="update-do-btn" class="btn btn-primary">更新插件</button>
       </div>
-      <div class="hint">从 GitHub 下载最新版本并覆盖本地插件文件</div>
     </section>
 
-    <footer>
-      <span>插件目录: <code id="ext-path"></code></span>
-    </footer>
+    <footer>本地服务端口: 3000</footer>
   </div>
 
   <script>
     async function init() {
-      const version = await window.api.getVersion();
-      document.getElementById('version').textContent = `v${version}`;
+      // 检测环境
+      const env = await window.api.checkEnv();
+      const depsBtn = document.getElementById('install-deps-btn');
+      const depsLog = document.getElementById('install-log');
+      if (env.depsInstalled) {
+        document.getElementById('env-status').innerHTML = '✓ 服务依赖已安装';
+        document.getElementById('env-status').className = 'env-status ok';
+        depsBtn.textContent = '重新安装';
+      } else {
+        document.getElementById('env-status').innerHTML = '✗ 服务依赖未安装';
+        document.getElementById('env-status').className = 'env-status err';
+      }
 
-      // 显示插件安装路径
+      // 插件状态
       const extPath = await window.api.getExtPath();
       document.getElementById('ext-install-path').textContent = extPath;
+      if (env.extInstalled) {
+        document.getElementById('ext-status').innerHTML = '✓ 插件已安装 (v' + env.extVersion + ')';
+        document.getElementById('ext-status').className = 'env-status ok';
+        document.getElementById('install-ext-btn').textContent = '重新安装';
+      } else {
+        document.getElementById('ext-status').innerHTML = '✗ 插件未安装';
+        document.getElementById('ext-status').className = 'env-status err';
+      }
 
-      window.api.onServerStatus((status) => {
+      // 服务状态监听
+      window.api.onServerStatus((s) => {
         const dot = document.getElementById('service-dot');
         const text = document.getElementById('service-text');
-        if (status.running) {
-          dot.className = 'dot on';
-          text.textContent = status.note || '服务运行中';
-        } else {
-          dot.className = 'dot off';
-          text.textContent = status.error || '服务未运行';
-        }
+        dot.className = 'dot ' + (s.running ? 'on' : 'off');
+        text.textContent = s.running ? (s.note || '服务运行中') : (s.error || '服务未运行');
       });
 
+      // 按钮绑定
       document.getElementById('refresh-btn').onclick = () => window.api.serverAction('check');
       document.getElementById('start-btn').onclick = () => window.api.serverAction('start');
       document.getElementById('stop-btn').onclick = () => window.api.serverAction('stop');
-
-      // 一键安装环境
-      document.getElementById('install-deps-btn').onclick = async () => {
-        const btn = document.getElementById('install-deps-btn');
-        const log = document.getElementById('install-log');
-        btn.disabled = true;
-        btn.textContent = '安装中...';
-        log.classList.remove('hidden');
-        log.textContent = '正在安装服务依赖 (npm install)...';
-        const r = await window.api.installServerDeps();
-        btn.disabled = false;
-        if (r.success) {
-          log.textContent = '✓ 服务依赖安装完成';
-          log.className = 'install-log success';
-        } else {
-          log.textContent = '✗ 安装失败: ' + r.error;
-          log.className = 'install-log error';
-        }
-      };
-
-      // 安装浏览器插件
-      document.getElementById('install-ext-btn').onclick = async () => {
-        const btn = document.getElementById('install-ext-btn');
-        const log = document.getElementById('install-log');
-        btn.disabled = true;
-        btn.textContent = '安装中...';
-        log.classList.remove('hidden');
-        log.textContent = '正在复制插件文件...';
-        const r = await window.api.installExtension();
-        btn.disabled = false;
-        if (r.success) {
-          log.textContent = '✓ 插件已安装到: ' + r.path;
-          log.className = 'install-log success';
-          document.getElementById('install-guide').classList.remove('hidden');
-        } else {
-          log.textContent = '✗ 安装失败: ' + r.error;
-          log.className = 'install-log error';
-        }
-      };
-
       document.getElementById('open-ext-dir-btn').onclick = () => window.api.openExtDir();
       document.getElementById('open-ext-page-btn').onclick = () => window.api.openExtensions();
 
+      // 安装环境
+      depsBtn.onclick = async () => {
+        depsBtn.disabled = true; depsBtn.textContent = '安装中...';
+        depsLog.classList.remove('hidden'); depsLog.textContent = '正在安装 npm 依赖...';
+        const r = await window.api.installServerDeps();
+        depsBtn.disabled = false;
+        if (r.success) {
+          depsLog.textContent = '✓ 安装完成'; depsLog.className = 'install-log success';
+          document.getElementById('env-status').innerHTML = '✓ 服务依赖已安装';
+          document.getElementById('env-status').className = 'env-status ok';
+          depsBtn.textContent = '重新安装';
+        } else {
+          depsLog.textContent = '✗ 失败: ' + r.error; depsLog.className = 'install-log error';
+        }
+      };
+
+      // 安装插件
+      document.getElementById('install-ext-btn').onclick = async () => {
+        const btn = document.getElementById('install-ext-btn');
+        const log = document.getElementById('ext-install-log');
+        btn.disabled = true; btn.textContent = '安装中...';
+        log.classList.remove('hidden'); log.textContent = '正在复制插件文件...';
+        const r = await window.api.installExtension();
+        btn.disabled = false;
+        if (r.success) {
+          log.textContent = '✓ 插件已安装'; log.className = 'install-log success';
+          const newEnv = await window.api.checkEnv();
+          if (newEnv.extVersion) {
+            document.getElementById('ext-status').innerHTML = '✓ 插件已安装 (v' + newEnv.extVersion + ')';
+            document.getElementById('ext-status').className = 'env-status ok';
+          }
+          btn.textContent = '重新安装';
+        } else {
+          log.textContent = '✗ 失败: ' + r.error; log.className = 'install-log error';
+        }
+      };
+
       // 更新检测
       document.getElementById('check-update-btn').onclick = async () => {
-        document.getElementById('update-status').textContent = '检测中...';
-        document.getElementById('check-update-btn').disabled = true;
+        const status = document.getElementById('update-status');
+        const btn = document.getElementById('check-update-btn');
+        status.textContent = '检测中...'; btn.disabled = true;
         const result = await window.api.checkUpdate();
-        document.getElementById('check-update-btn').disabled = false;
-
-        if (result.error) {
-          document.getElementById('update-status').textContent = '检测失败: ' + result.error;
-          return;
-        }
+        btn.disabled = false;
+        if (result.error) { status.textContent = '检测失败: ' + result.error; return; }
         if (!result.hasUpdate) {
-          document.getElementById('update-status').textContent = '已是最新版本';
-          document.getElementById('update-info').classList.add('hidden');
-          return;
+          const v = result.installedVersion ? '当前 v' + result.installedVersion : '未安装插件';
+          status.textContent = v + ' — 已是最新'; return;
         }
-
-        document.getElementById('update-status').textContent = '发现新版本';
-        document.getElementById('update-version').textContent = `${result.currentVersion} → ${result.latestVersion}`;
+        status.textContent = '发现新版本';
+        document.getElementById('update-version').textContent =
+          'v' + (result.installedVersion || '?') + ' → v' + result.latestVersion;
         document.getElementById('update-changelog').textContent = result.changelog;
         document.getElementById('update-info').classList.remove('hidden');
-
-        document.getElementById('update-btn').onclick = async () => {
-          document.getElementById('update-btn').disabled = true;
-          document.getElementById('update-btn').textContent = '下载中...';
+        document.getElementById('update-do-btn').onclick = async () => {
+          const ubtn = document.getElementById('update-do-btn');
+          ubtn.disabled = true; ubtn.textContent = '下载中...';
           const dl = await window.api.doUpdate(result.zipUrl);
-          document.getElementById('update-btn').disabled = false;
-          document.getElementById('update-btn').textContent = dl.success ? '更新完成' : '更新失败';
+          ubtn.disabled = false;
+          ubtn.textContent = dl.success ? '✓ 更新完成' : '✗ 更新失败';
+          if (dl.success) {
+            const newEnv = await window.api.checkEnv();
+            if (newEnv.extVersion) {
+              document.getElementById('ext-status').innerHTML = '✓ 插件已安装 (v' + newEnv.extVersion + ')';
+              document.getElementById('ext-status').className = 'env-status ok';
+            }
+          }
         };
       };
     }
-
     init();
   </script>
 </body>
