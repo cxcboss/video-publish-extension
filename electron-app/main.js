@@ -12,7 +12,9 @@ let serverRunning = false;
 
 const SERVER_PORT = 3000;
 const SERVER_PATH = path.join(__dirname, '..', 'local-server', 'server.js');
-const EXTENSION_PATH = path.join(__dirname, '..', 'chrome-extension');
+const SERVER_DIR = path.join(__dirname, '..', 'local-server');
+const EXTENSION_SRC = path.join(__dirname, '..', 'chrome-extension');
+const EXTENSION_DEST = path.join(app.getPath('userData'), 'chrome-extension');
 const REPO = 'cxcboss/video-publish-extension';
 const GITHUB_API = `https://api.github.com/repos/${REPO}/releases/latest`;
 
@@ -146,7 +148,7 @@ async function downloadAndInstall(zipUrl) {
     const srcExt = path.join(repoDir, 'chrome-extension');
     if (!fs.existsSync(srcExt)) throw new Error('ZIP 中未找到 chrome-extension 目录');
 
-    fs.cpSync(srcExt, EXTENSION_PATH, { recursive: true });
+    fs.cpSync(srcExt, EXTENSION_DEST, { recursive: true });
 
     fs.rmSync(tmpZip, { force: true });
     fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -190,6 +192,34 @@ app.whenReady().then(() => {
   ipcMain.handle('open-extensions', () => shell.openExternal('chrome://extensions'));
   ipcMain.handle('open-github', () => shell.openExternal(`https://github.com/${REPO}/releases`));
   ipcMain.handle('get-version', () => app.getVersion());
+  ipcMain.handle('get-ext-path', () => EXTENSION_DEST);
+
+  // 一键安装服务依赖
+  ipcMain.handle('install-server-deps', async () => {
+    try {
+      const { execSync } = require('child_process');
+      execSync('npm install', { cwd: SERVER_DIR, stdio: 'pipe', timeout: 120000 });
+      return { success: true };
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  // 安装浏览器插件到 userData 目录
+  ipcMain.handle('install-extension', async () => {
+    try {
+      if (!fs.existsSync(EXTENSION_SRC)) throw new Error('源插件目录不存在');
+      fs.cpSync(EXTENSION_SRC, EXTENSION_DEST, { recursive: true });
+      return { success: true, path: EXTENSION_DEST };
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  // 打开插件安装目录
+  ipcMain.handle('open-ext-dir', () => {
+    shell.openPath(EXTENSION_DEST);
+  });
 
   mainWindow.on('closed', () => {
     mainWindow = null;

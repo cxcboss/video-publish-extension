@@ -30,6 +30,30 @@
       <div class="hint">端口: 3000 | 用于插件读取本地视频文件</div>
     </section>
 
+    <!-- 环境安装 -->
+    <section class="card">
+      <div class="card-header">
+        <span>环境配置</span>
+      </div>
+      <div class="install-actions">
+        <button id="install-deps-btn" class="btn">一键安装环境</button>
+        <button id="install-ext-btn" class="btn btn-primary">安装浏览器插件</button>
+      </div>
+      <div id="install-log" class="install-log hidden"></div>
+      <div id="install-guide" class="install-guide hidden">
+        <div class="guide-title">插件安装教程</div>
+        <ol class="guide-steps">
+          <li>打开 Chrome 浏览器，地址栏输入 <code>chrome://extensions</code></li>
+          <li>右上角打开「开发者模式」开关</li>
+          <li>点击「加载已解压的扩展程序」按钮</li>
+          <li>选择文件夹：<code id="ext-install-path"></code></li>
+          <li>插件安装完成，点击工具栏图标使用</li>
+        </ol>
+        <button id="open-ext-dir-btn" class="btn btn-outline">打开插件目录</button>
+        <button id="open-ext-page-btn" class="btn btn-outline">打开扩展管理页</button>
+      </div>
+    </section>
+
     <!-- 更新检测 -->
     <section class="card">
       <div class="card-header">
@@ -55,6 +79,10 @@
       const version = await window.api.getVersion();
       document.getElementById('version').textContent = `v${version}`;
 
+      // 显示插件安装路径
+      const extPath = await window.api.getExtPath();
+      document.getElementById('ext-install-path').textContent = extPath;
+
       window.api.onServerStatus((status) => {
         const dot = document.getElementById('service-dot');
         const text = document.getElementById('service-text');
@@ -71,6 +99,49 @@
       document.getElementById('start-btn').onclick = () => window.api.serverAction('start');
       document.getElementById('stop-btn').onclick = () => window.api.serverAction('stop');
 
+      // 一键安装环境
+      document.getElementById('install-deps-btn').onclick = async () => {
+        const btn = document.getElementById('install-deps-btn');
+        const log = document.getElementById('install-log');
+        btn.disabled = true;
+        btn.textContent = '安装中...';
+        log.classList.remove('hidden');
+        log.textContent = '正在安装服务依赖 (npm install)...';
+        const r = await window.api.installServerDeps();
+        btn.disabled = false;
+        if (r.success) {
+          log.textContent = '✓ 服务依赖安装完成';
+          log.className = 'install-log success';
+        } else {
+          log.textContent = '✗ 安装失败: ' + r.error;
+          log.className = 'install-log error';
+        }
+      };
+
+      // 安装浏览器插件
+      document.getElementById('install-ext-btn').onclick = async () => {
+        const btn = document.getElementById('install-ext-btn');
+        const log = document.getElementById('install-log');
+        btn.disabled = true;
+        btn.textContent = '安装中...';
+        log.classList.remove('hidden');
+        log.textContent = '正在复制插件文件...';
+        const r = await window.api.installExtension();
+        btn.disabled = false;
+        if (r.success) {
+          log.textContent = '✓ 插件已安装到: ' + r.path;
+          log.className = 'install-log success';
+          document.getElementById('install-guide').classList.remove('hidden');
+        } else {
+          log.textContent = '✗ 安装失败: ' + r.error;
+          log.className = 'install-log error';
+        }
+      };
+
+      document.getElementById('open-ext-dir-btn').onclick = () => window.api.openExtDir();
+      document.getElementById('open-ext-page-btn').onclick = () => window.api.openExtensions();
+
+      // 更新检测
       document.getElementById('check-update-btn').onclick = async () => {
         document.getElementById('update-status').textContent = '检测中...';
         document.getElementById('check-update-btn').disabled = true;
