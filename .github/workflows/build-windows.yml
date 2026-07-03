@@ -1,0 +1,33 @@
+name: Build Windows App
+
+on:
+  push:
+    branches: [main]
+    paths: ['win_app/**']
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.27.0'
+          channel: stable
+
+      - name: Install dependencies
+        working-directory: win_app
+        run: flutter pub get
+
+      - name: Build Windows
+        working-directory: win_app
+        run: flutter build windows --release
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: video-publisher-windows
+          path: win_app/build/windows/x64/runner/Release/
+          retention-days: 7

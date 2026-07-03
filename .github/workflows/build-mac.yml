@@ -1,0 +1,48 @@
+name: Build Mac App
+
+on:
+  push:
+    branches: [main]
+    paths: ['mac-app/**']
+  workflow_dispatch:
+
+jobs:
+  build-mac:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Swift app
+        working-directory: mac-app
+        run: |
+          swift build -c release
+          mkdir -p AIVideoPublisher.app/Contents/MacOS
+          cp .build/release/AIVideoPublisher AIVideoPublisher.app/Contents/MacOS/
+          cat > AIVideoPublisher.app/Contents/Info.plist << 'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleName</key><string>AI视频发布助手</string>
+            <key>CFBundleDisplayName</key><string>AI视频发布助手</string>
+            <key>CFBundleIdentifier</key><string>com.cxcboss.video-publisher</string>
+            <key>CFBundleVersion</key><string>2.5.1</string>
+            <key>CFBundleShortVersionString</key><string>2.5.1</string>
+            <key>CFBundleExecutable</key><string>AIVideoPublisher</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>LSMinimumSystemVersion</key><string>13.0</string>
+            <key>NSHighResolutionCapable</key><true/>
+          </dict>
+          </plist>
+          PLIST
+
+      - name: Create DMG
+        run: |
+          hdiutil create -volname "AI视频发布助手" -srcfolder mac-app/AIVideoPublisher.app -ov -format UDZO /tmp/ai-video-publisher.dmg
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: video-publisher-mac
+          path: /tmp/ai-video-publisher.dmg
+          retention-days: 7

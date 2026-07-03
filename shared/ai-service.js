@@ -1,5 +1,5 @@
 const AI_API_URL = 'https://ark.cn-beijing.volces.com/api/v3/responses';
-const AI_API_KEY = '22931f77-d726-4071-93a0-e8d7e470e435';
+const AI_API_KEY = process.env.DOUBAO_API_KEY || ''; // 通过环境变量设置
 const AI_MODEL = 'doubao-seed-2-0-mini-260215';
 
 class AIService {
