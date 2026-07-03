@@ -1,0 +1,38 @@
+{
+  "name": "video-publisher-app",
+  "version": "2.3.2",
+  "description": "AI 视频发布助手 - 桌面管理工具",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder",
+    "build:mac": "electron-builder --mac",
+    "build:win": "electron-builder --win"
+  },
+  "dependencies": {
+    "electron": "^28.0.0",
+    "extract-zip": "^2.0.1",
+    "node-fetch": "^2.7.0"
+  },
+  "devDependencies": {
+    "electron-builder": "^24.9.1"
+  },
+  "build": {
+    "appId": "com.cxcboss.video-publisher",
+    "productName": "AI视频发布助手",
+    "mac": {
+      "category": "public.app-category.utilities",
+      "target": ["dmg"]
+    },
+    "win": {
+      "target": ["nsis"]
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "index.html",
+      "styles.css",
+      "icon.png"
+    ]
+  }
+}

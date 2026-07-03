@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src http://127.0.0.1:* https://api.github.com">
+  <title>AI 视频发布助手</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app">
+    <header>
+      <h1>AI 视频发布助手</h1>
+      <span class="version" id="version">v2.3.2</span>
+    </header>
+
+    <!-- 服务状态 -->
+    <section class="card">
+      <div class="card-header">
+        <span>本地服务</span>
+        <button id="refresh-btn" class="icon-btn" title="刷新状态">↻</button>
+      </div>
+      <div class="service-status">
+        <span class="dot" id="service-dot"></span>
+        <span id="service-text">检测中...</span>
+      </div>
+      <div class="service-actions">
+        <button id="start-btn" class="btn">启动服务</button>
+        <button id="stop-btn" class="btn btn-outline">停止</button>
+      </div>
+      <div class="hint">端口: 3000 | 用于插件读取本地视频文件</div>
+    </section>
+
+    <!-- 更新检测 -->
+    <section class="card">
+      <div class="card-header">
+        <span>插件更新</span>
+        <button id="check-update-btn" class="icon-btn" title="检测更新">↻</button>
+      </div>
+      <div id="update-status" class="update-status">点击检测按钮检查更新</div>
+      <div id="update-info" class="hidden">
+        <div class="update-version" id="update-version"></div>
+        <div class="update-changelog" id="update-changelog"></div>
+        <button id="update-btn" class="btn btn-primary">更新插件</button>
+      </div>
+      <div class="hint">从 GitHub 下载最新版本并覆盖本地插件文件</div>
+    </section>
+
+    <footer>
+      <span>插件目录: <code id="ext-path"></code></span>
+    </footer>
+  </div>
+
+  <script>
+    async function init() {
+      const version = await window.api.getVersion();
+      document.getElementById('version').textContent = `v${version}`;
+
+      window.api.onServerStatus((status) => {
+        const dot = document.getElementById('service-dot');
+        const text = document.getElementById('service-text');
+        if (status.running) {
+          dot.className = 'dot on';
+          text.textContent = status.note || '服务运行中';
+        } else {
+          dot.className = 'dot off';
+          text.textContent = status.error || '服务未运行';
+        }
+      });
+
+      document.getElementById('refresh-btn').onclick = () => window.api.serverAction('check');
+      document.getElementById('start-btn').onclick = () => window.api.serverAction('start');
+      document.getElementById('stop-btn').onclick = () => window.api.serverAction('stop');
+
+      document.getElementById('check-update-btn').onclick = async () => {
+        document.getElementById('update-status').textContent = '检测中...';
+        document.getElementById('check-update-btn').disabled = true;
+        const result = await window.api.checkUpdate();
+        document.getElementById('check-update-btn').disabled = false;
+
+        if (result.error) {
+          document.getElementById('update-status').textContent = '检测失败: ' + result.error;
+          return;
+        }
+        if (!result.hasUpdate) {
+          document.getElementById('update-status').textContent = '已是最新版本';
+          document.getElementById('update-info').classList.add('hidden');
+          return;
+        }
+
+        document.getElementById('update-status').textContent = '发现新版本';
+        document.getElementById('update-version').textContent = `${result.currentVersion} → ${result.latestVersion}`;
+        document.getElementById('update-changelog').textContent = result.changelog;
+        document.getElementById('update-info').classList.remove('hidden');
+
+        document.getElementById('update-btn').onclick = async () => {
+          document.getElementById('update-btn').disabled = true;
+          document.getElementById('update-btn').textContent = '下载中...';
+          const dl = await window.api.doUpdate(result.zipUrl);
+          document.getElementById('update-btn').disabled = false;
+          document.getElementById('update-btn').textContent = dl.success ? '更新完成' : '更新失败';
+        };
+      };
+    }
+
+    init();
+  </script>
+</body>
+</html>
