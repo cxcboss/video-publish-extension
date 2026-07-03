@@ -26,6 +26,7 @@ function createWindow() {
     height: 560,
     resizable: false,
     title: 'AI 视频发布助手',
+    icon: path.join(__dirname, 'icon.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -120,7 +121,7 @@ async function checkForUpdate() {
       if ((latParts[i] || 0) < (curParts[i] || 0)) break;
     }
 
-    return { hasUpdate: isNewer, installedVersion, latestVersion, changelog: release.body || '', zipUrl: release.zipball_url || '' };
+    return { hasUpdate: isNewer, installedVersion, latestVersion, changelog: release.body || '', zipUrl: release.assets?.[0]?.browser_download_url || release.zipball_url || '' };
   } catch (e) {
     return { hasUpdate: false, installedVersion, latestVersion: null, error: e.message || '网络连接失败' };
   }
@@ -136,21 +137,27 @@ async function downloadAndInstall(zipUrl) {
     if (fs.existsSync(tmpDir)) fs.rmSync(tmpDir, { recursive: true });
     fs.mkdirSync(tmpDir, { recursive: true });
     await extractZip(tmpZip, { dir: tmpDir });
-    // ZIP 内可能有一层仓库根目录包裹
     const entries = fs.readdirSync(tmpDir);
-    const root = entries.length === 1 && fs.statSync(path.join(tmpDir, entries[0])).isDirectory()
-      ? path.join(tmpDir, entries[0]) : tmpDir;
-    // 仓库打包的 ZIP 内 chrome-extension 在根目录（我们只打包插件内容）
-    const src = fs.existsSync(path.join(root, 'manifest.json')) ? root
-      : fs.existsSync(path.join(root, 'chrome-extension')) ? path.join(root, 'chrome-extension')
-      : null;
-    if (!src) throw new Error('ZIP 中未找到插件文件');
-    // 先清空再覆盖
+    // 判断 ZIP 内容结构：
+    // 情况A（release asset）: 直接是 manifest.json / background/ 等
+    // 情况B（zipball）: 一层 wrapper 目录包裹
+    let src = null;
+    if (fs.existsSync(path.join(tmpDir, 'manifest.json'))) {
+      src = tmpDir;
+    } else if (entries.length === 1 && fs.statSync(path.join(tmpDir, entries[0])).isDirectory()) {
+      const inner = path.join(tmpDir, entries[0]);
+      if (fs.existsSync(path.join(inner, 'manifest.json'))) src = inner;
+      else if (fs.existsSync(path.join(inner, 'chrome-extension'))) src = path.join(inner, 'chrome-extension');
+    }
+    if (!src) throw new Error('ZIP 中未找到插件文件（缺少 manifest.json）');
     if (fs.existsSync(EXTENSION_DEST)) fs.rmSync(EXTENSION_DEST, { recursive: true });
     fs.cpSync(src, EXTENSION_DEST, { recursive: true });
+    // 验证更新结果
+    if (!fs.existsSync(INSTALLED_MANIFEST)) throw new Error('更新后 manifest.json 不存在');
+    const newVer = JSON.parse(fs.readFileSync(INSTALLED_MANIFEST, 'utf8')).version;
     fs.rmSync(tmpZip, { force: true });
     fs.rmSync(tmpDir, { recursive: true, force: true });
-    return { success: true };
+    return { success: true, newVersion: newVer };
   } catch (e) {
     fs.rmSync(tmpZip, { force: true });
     fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -204,7 +211,6 @@ app.whenReady().then(() => {
   });
 
   ipcMain.handle('open-ext-dir', () => shell.openPath(EXTENSION_DEST));
-  ipcMain.handle('open-extensions', () => shell.openExternal('chrome://extensions'));
   ipcMain.handle('get-ext-path', () => EXTENSION_DEST);
 
   mainWindow.on('closed', () => { mainWindow = null; stopServer(); app.quit(); });

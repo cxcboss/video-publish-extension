@@ -55,7 +55,6 @@
           <li>选择文件夹：<code id="ext-install-path">...</code></li>
         </ol>
         <button id="open-ext-dir-btn" class="btn btn-outline">打开插件目录</button>
-        <button id="open-ext-page-btn" class="btn btn-outline">打开扩展管理页</button>
       </div>
     </section>
 
@@ -116,7 +115,6 @@
       document.getElementById('start-btn').onclick = () => window.api.serverAction('start');
       document.getElementById('stop-btn').onclick = () => window.api.serverAction('stop');
       document.getElementById('open-ext-dir-btn').onclick = () => window.api.openExtDir();
-      document.getElementById('open-ext-page-btn').onclick = () => window.api.openExtensions();
 
       // 安装环境
       depsBtn.onclick = async () => {
