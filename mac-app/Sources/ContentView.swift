@@ -21,7 +21,7 @@ struct ContentView: View {
             // 标题
             HStack {
                 Image(systemName: "play.circle.fill").foregroundColor(.blue).font(.title3)
-                Text("AI 视频发布助手").font(.headline)
+                Text("视频发布助手").font(.headline)
                 Spacer()
                 Text("v\(extVersion.isEmpty ? "2.5.0" : extVersion)")
                     .font(.caption).foregroundStyle(.secondary)

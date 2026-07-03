@@ -2,7 +2,7 @@
 import PackageDescription
 
 let package = Package(
-    name: "AI视频发布助手",
+    name: "video-publisher-app",
     platforms: [.macOS(.v13)],
     targets: [
         .executableTarget(

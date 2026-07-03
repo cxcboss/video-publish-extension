@@ -12,7 +12,7 @@ class VideoPublisherApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'AI 视频发布助手',
+      title: '视频发布助手',
       debugShowCheckedModeBanner: false,
       theme: ThemeData.dark(useMaterial3: true).copyWith(
         scaffoldBackgroundColor: const Color(0xFF1E1E1E),
@@ -319,7 +319,7 @@ class _HomePageState extends State<HomePage> {
                 Row(children: [
                   const Icon(Icons.play_circle_fill, color: Colors.blue, size: 28),
                   const SizedBox(width: 8),
-                  const Text('AI 视频发布助手', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
+                  const Text('视频发布助手', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
                   const Spacer(),
                   Text('v${extVersion.isEmpty ? "2.5.0" : extVersion}',
                       style: const TextStyle(fontSize: 12, color: Colors.grey)),
