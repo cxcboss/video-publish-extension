@@ -186,6 +186,8 @@ body {
 /* row-between */
 .row-between { display: flex; justify-content: space-between; align-items: center; }
 .inline-input { display: flex; align-items: center; gap: 6px; }
+.small-label { font-size: 11px; color: var(--text-3); margin: 0; }
+.small-input { width: 40px; padding: 3px 4px; border: 1px solid var(--border); border-radius: 4px; font-size: 11px; background: var(--bg-input); color: var(--text); text-align: center; }
 .inline-input input[type="datetime-local"] {
   padding: 4px 6px;
   border: 1px solid var(--border);

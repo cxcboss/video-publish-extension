@@ -125,6 +125,9 @@ chrome.debugger.onDetach.addListener((source) => {
   }
 });
 
+// 点击工具栏图标时自动打开侧边栏
+chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   switch (message.action) {
     case 'startPublishFlow':
@@ -149,6 +152,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       break;
       
     case 'stopPublish':
+      clearPublishTimeout();
       publishState.isPublishing = false;
       if (publishState.targetTabId) {
         detachDebugger(publishState.targetTabId);
@@ -208,7 +212,10 @@ async function handleStartPublishFlow(message) {
     expectedTimestamp: null,
     debuggerAttached: false,
     publishRecords: [],
-    waitingForNavigation: false
+    waitingForNavigation: false,
+    retryCounts: {},
+    publishStartTime: null,
+    timeoutTimer: null
   };
   
   console.log('[Background] 开始发布流程，共', message.videos.length, '个视频');
@@ -219,42 +226,96 @@ async function handleStartPublishFlow(message) {
 
 async function publishNextVideo() {
   if (!publishState.isPublishing) {
-    console.log('[Background] 发布已取消');
     return;
   }
-  
+
   if (publishState.currentIndex >= publishState.videos.length) {
-    console.log('[Background] 所有视频发布完成');
     await finishAllPublish();
     return;
   }
-  
+
   const video = publishState.videos[publishState.currentIndex];
   const idx = publishState.currentIndex + 1;
   const total = publishState.videos.length;
-  console.log(`[Background] 准备发布第 ${idx}/${total} 个视频: ${video.name}`);
-  sendProgress(`准备: ${video.name}`, 'publishing', idx, total);
+
+  // 清除上一个视频的超时计时器
+  clearPublishTimeout();
 
   const platformUrl = publishState.platform === 'douyin'
     ? 'https://creator.douyin.com/creator-micro/content/publish'
     : 'https://channels.weixin.qq.com/platform/post/create';
-  
+
   publishState.commandSent = false;
   publishState.waitingForNavigation = false;
   publishState.debuggerAttached = false;
-  
+
   const tab = await chrome.tabs.create({ url: platformUrl });
   publishState.targetTabId = tab.id;
-  console.log('[Background] 已打开标签页:', tab.id);
-  
+
   const needDebugger = publishState.platform === 'douyin' || (publishState.platform === 'weixin' &&
     (publishState.settings.scheduledPublish || publishState.videos.length > 1));
 
   if (needDebugger) {
-    console.log('[Background] 需要调试器，立即附加... 平台:',
-      publishState.platform, '原因:',
-      publishState.platform === 'douyin' ? '抖音上传需要调试器' : (publishState.settings.scheduledPublish ? '定时发布' : '多视频发布'));
     await attachDebugger(tab.id);
+  }
+
+  // 启动超时计时器
+  startPublishTimeout();
+}
+
+/**
+ * 启动单个视频的超时计时器（30秒）
+ * 超时后关闭当前标签页并重试
+ */
+function startPublishTimeout() {
+  clearPublishTimeout();
+  if (!publishState.settings.autoRetry) return;
+
+  publishState.publishStartTime = Date.now();
+  const timeoutMs = 30 * 1000;
+
+  publishState.timeoutTimer = setTimeout(async () => {
+    if (!publishState.isPublishing || !publishState.targetTabId) return;
+
+    const idx = publishState.currentIndex;
+    const currentRetries = publishState.retryCounts[idx] || 0;
+    const maxRetries = publishState.settings.maxRetries || 1;
+
+    if (currentRetries < maxRetries) {
+      publishState.retryCounts[idx] = currentRetries + 1;
+      sendProgress(`超时重试 (${currentRetries + 1}/${maxRetries})`, 'retrying', idx + 1, publishState.videos.length);
+
+      // 关闭当前标签页
+      detachDebugger(publishState.targetTabId);
+      chrome.tabs.remove(publishState.targetTabId).catch(() => {});
+      publishState.targetTabId = null;
+      publishState.debuggerAttached = false;
+      publishState.commandSent = false;
+
+      // 等待后重新发布同一个视频
+      await new Promise(r => setTimeout(r, 3000));
+      await publishNextVideo();
+    } else {
+      // 超过最大重试次数，跳过这个视频
+      sendProgress(`重试${maxRetries}次仍超时，跳过`, 'skipped', idx + 1, publishState.videos.length);
+
+      detachDebugger(publishState.targetTabId);
+      chrome.tabs.remove(publishState.targetTabId).catch(() => {});
+      publishState.targetTabId = null;
+      publishState.currentIndex++;
+      publishState.debuggerAttached = false;
+      publishState.commandSent = false;
+
+      await new Promise(r => setTimeout(r, 2000));
+      await publishNextVideo();
+    }
+  }, timeoutMs);
+}
+
+function clearPublishTimeout() {
+  if (publishState.timeoutTimer) {
+    clearTimeout(publishState.timeoutTimer);
+    publishState.timeoutTimer = null;
   }
 }
 
@@ -320,6 +381,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
 });
 
 async function handleDouyinPublishDone(message) {
+  clearPublishTimeout();
   const video = publishState.videos[publishState.currentIndex];
   const idx = publishState.currentIndex + 1;
   const total = publishState.videos.length;
@@ -363,6 +425,7 @@ async function handleDouyinPublishDone(message) {
 }
 
 async function handleVideoPublishDone() {
+  clearPublishTimeout();
   const video = publishState.videos[publishState.currentIndex];
   const idx = publishState.currentIndex + 1;
   const total = publishState.videos.length;

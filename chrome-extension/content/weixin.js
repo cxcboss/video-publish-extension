@@ -261,11 +261,10 @@ class WeixinPublisher {
       aiPromise = this.generateAIContent(video.name, settings);
     }
 
-    // ── 步骤4: 等待上传完成（表单元素出现） ──
+    // ── 步骤4: 等待上传完成（最多8秒，超时则继续填写表单） ──
     step('等待视频上传完成...');
-    const uploadOk = await this.waitForUploadComplete(60);
-    if (!uploadOk) step('上传检测超时，尝试继续...');
-    else step('视频上传完成');
+    const uploadOk = await this.waitForUploadComplete(8);
+    if (!uploadOk) step('上传检测超时，继续填写表单...');
 
     // ── 步骤5: 获取 AI 结果 ──
     let aiContent = { topics: [], description: '' };

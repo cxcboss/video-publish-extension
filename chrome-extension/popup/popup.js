@@ -56,6 +56,11 @@ class PopupController {
       document.getElementById('video-content-wrap').classList.toggle('hidden', !e.target.checked);
     });
 
+    // 自动重试开关
+    document.getElementById('auto-retry').addEventListener('change', (e) => {
+      document.getElementById('retry-count-wrap').classList.toggle('hidden', !e.target.checked);
+    });
+
     // AI 配置折叠 - 整行可点击（label 内的点击除外，避免 toggle 冲突）
     document.getElementById('auto-generate-row').addEventListener('click', () => {
       const body = document.getElementById('ai-config-wrap');
@@ -112,7 +117,8 @@ class PopupController {
     try {
       const r = await chrome.storage.local.get([
         'videoPath', 'aiProvider', 'aiKey', 'aiModel',
-        'autoGenerate', 'videoContent', 'scheduledPublish', 'scheduleTime'
+        'autoGenerate', 'videoContent', 'scheduledPublish', 'scheduleTime',
+        'autoRetry', 'maxRetries'
       ]);
       if (r.videoPath) {
         document.getElementById('video-path').value = r.videoPath;
@@ -133,6 +139,11 @@ class PopupController {
       }
       if (r.scheduleTime) document.getElementById('schedule-time').value = r.scheduleTime;
       else this.setDefaultScheduleTime();
+      if (r.autoRetry) {
+        document.getElementById('auto-retry').checked = true;
+        document.getElementById('retry-count-wrap').classList.remove('hidden');
+      }
+      if (r.maxRetries) document.getElementById('max-retries').value = r.maxRetries;
     } catch (e) { console.error(e); }
   }
 
@@ -153,7 +164,9 @@ class PopupController {
         autoGenerate: document.getElementById('auto-generate').checked,
         videoContent: document.getElementById('video-content').value,
         scheduledPublish: document.getElementById('scheduled-publish').checked,
-        scheduleTime: document.getElementById('schedule-time').value
+        scheduleTime: document.getElementById('schedule-time').value,
+        autoRetry: document.getElementById('auto-retry').checked,
+        maxRetries: parseInt(document.getElementById('max-retries').value) || 1
       });
     } catch (e) { console.error(e); }
   }
@@ -363,7 +376,9 @@ class PopupController {
       aiModel: document.getElementById('ai-model').value.trim(),
       videoContent: document.getElementById('video-content').value.trim(),
       scheduledPublish: document.getElementById('scheduled-publish').checked,
-      scheduleTime: document.getElementById('schedule-time').value
+      scheduleTime: document.getElementById('schedule-time').value,
+      autoRetry: document.getElementById('auto-retry').checked,
+      maxRetries: parseInt(document.getElementById('max-retries').value) || 1
     };
 
     // 构建进度步骤

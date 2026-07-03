@@ -16,7 +16,7 @@
         <span class="status-text" id="status-text">检测中...</span>
       </div>
       <button id="publish-btn" class="publish-btn">发布</button>
-      <span class="version" id="version-text">v2.3.0</span>
+      <span class="version" id="version-text">v2.3.1</span>
       <button id="update-btn" class="update-btn" title="检查更新">↻</button>
     </div>
 
@@ -54,6 +54,22 @@
         </div>
       </div>
       <div class="hint" id="schedule-hint">抖音：调用平台原生定时发布</div>
+    </div>
+
+    <!-- 自动重试 -->
+    <div class="section compact">
+      <div class="row-between">
+        <label class="toggle-label">
+          <input type="checkbox" id="auto-retry">
+          <span class="toggle-switch"></span>
+          <span>超时自动重试</span>
+        </label>
+        <div id="retry-count-wrap" class="inline-input hidden">
+          <label class="small-label">次数</label>
+          <input type="number" id="max-retries" min="1" max="10" value="1" class="small-input">
+        </div>
+      </div>
+      <div class="hint">单个视频任务超时30秒时自动重试</div>
     </div>
 
     <!-- AI 生成（含 AI 配置折叠区） -->

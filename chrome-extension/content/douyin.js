@@ -82,10 +82,10 @@ class DouyinPublisher {
       aiPromise = this.generateAIContent(video.name, settings);
     }
 
-    // 轮询等待上传完成（contenteditable 出现即表示表单已加载）
+    // 轮询等待上传完成（最多8秒，超时则继续填写表单）
     this.notifyProgress('等待视频处理...', idx, totalVideos);
-    const uploadOk = await this.waitForUploadComplete(60);
-    await this.delay(1500);
+    const uploadOk = await this.waitForUploadComplete(8);
+    if (!uploadOk) step('上传检测超时，继续填写表单...');
 
     // 步骤3: 定时发布
     if (settings.scheduledPublish && settings.scheduleTime) {
