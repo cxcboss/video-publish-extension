@@ -2,11 +2,11 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>CFBundleName</key><string>AI视频发布助手</string>
-  <key>CFBundleDisplayName</key><string>AI视频发布助手</string>
+  <key>CFBundleName</key><string>视频发布助手</string>
+  <key>CFBundleDisplayName</key><string>视频发布助手</string>
   <key>CFBundleIdentifier</key><string>com.cxcboss.video-publisher</string>
-  <key>CFBundleVersion</key><string>2.5.1</string>
-  <key>CFBundleShortVersionString</key><string>2.5.1</string>
+  <key>CFBundleVersion</key><string>2.5.2</string>
+  <key>CFBundleShortVersionString</key><string>2.5.2</string>
   <key>CFBundleExecutable</key><string>AIVideoPublisher</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>

@@ -1,7 +1,7 @@
 name: video_publisher_app
 description: "AI 视频发布助手 - Windows 版"
 publish_to: 'none'
-version: 2.5.0+1
+version: 2.5.2+1
 
 environment:
   sdk: ^3.10.8

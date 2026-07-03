@@ -327,7 +327,7 @@ class _HomePageState extends State<HomePage> {
                   const SizedBox(width: 8),
                   const Text('视频发布助手', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
                   const Spacer(),
-                  Text('v${extVersion.isEmpty ? "2.5.0" : extVersion}',
+                  Text('v${extVersion.isEmpty ? "2.5.2" : extVersion}',
                       style: const TextStyle(fontSize: 12, color: Colors.grey)),
                 ]),
                 const SizedBox(height: 16),
