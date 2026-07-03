@@ -118,6 +118,19 @@ body {
 .update-btn:hover { border-color: var(--text-2); color: var(--text-2); }
 .update-btn.has-update { border-color: var(--dot-on); color: var(--dot-on); }
 
+/* 更新提示面板 */
+.update-panel { background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 10px; margin: 0 0 6px 0; }
+.update-panel-header { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; font-size: 12px; font-weight: 600; color: var(--text); }
+.update-icon { font-size: 14px; }
+.update-panel-body { margin-bottom: 8px; }
+.update-panel-version { font-size: 11px; color: var(--text-2); margin-bottom: 4px; }
+.update-changelog { font-size: 10px; color: var(--text-3); max-height: 80px; overflow-y: auto; line-height: 1.5; white-space: pre-wrap; padding: 4px 6px; background: var(--bg-input); border-radius: 4px; }
+.update-panel-actions { display: flex; gap: 6px; }
+.update-do-btn { flex: 1; padding: 5px 0; border: none; border-radius: 4px; font-size: 11px; font-weight: 600; cursor: pointer; background: var(--dot-on); color: #fff; }
+.update-do-btn:hover { opacity: 0.9; }
+.update-dismiss-btn { padding: 5px 10px; border: 1px solid var(--border); border-radius: 4px; font-size: 11px; cursor: pointer; background: none; color: var(--text-3); }
+.update-dismiss-btn:hover { border-color: var(--text-2); color: var(--text-2); }
+
 /* 进度条 */
 .progress-bar {
   height: 3px;

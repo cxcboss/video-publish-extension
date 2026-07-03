@@ -16,8 +16,24 @@
         <span class="status-text" id="status-text">检测中...</span>
       </div>
       <button id="publish-btn" class="publish-btn">发布</button>
-      <span class="version" id="version-text">v2.3.1</span>
+      <span class="version" id="version-text">v2.3.2</span>
       <button id="update-btn" class="update-btn" title="检查更新">↻</button>
+    </div>
+
+    <!-- 更新提示面板 -->
+    <div id="update-panel" class="update-panel hidden">
+      <div class="update-panel-header">
+        <span class="update-icon">⬆</span>
+        <span id="update-panel-title">发现新版本</span>
+      </div>
+      <div class="update-panel-body">
+        <div id="update-panel-version"></div>
+        <div id="update-panel-changelog" class="update-changelog"></div>
+      </div>
+      <div class="update-panel-actions">
+        <button id="update-do-btn" class="update-do-btn">更新</button>
+        <button id="update-dismiss-btn" class="update-dismiss-btn">稍后</button>
+      </div>
     </div>
 
     <!-- 发布进度 -->

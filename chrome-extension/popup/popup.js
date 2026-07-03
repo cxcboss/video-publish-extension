@@ -27,6 +27,7 @@ class PopupController {
     this.checkServerStatus();
     this.pollPublishState();
     this.listenProgress();
+    this.checkForUpdate();
   }
 
   // ==================== 事件绑定 ====================
@@ -72,6 +73,13 @@ class PopupController {
     // AI 测试按钮
     document.getElementById('test-ai-btn').addEventListener('click', () => this.testAI());
 
+    // 更新按钮
+    document.getElementById('update-btn').addEventListener('click', () => this.checkForUpdate(true));
+    document.getElementById('update-do-btn').addEventListener('click', () => this.doUpdate());
+    document.getElementById('update-dismiss-btn').addEventListener('click', () => {
+      document.getElementById('update-panel').classList.add('hidden');
+    });
+
     // 路径输入（延迟加载）
     const pathInput = document.getElementById('video-path');
     pathInput.addEventListener('input', (e) => {
@@ -109,6 +117,77 @@ class PopupController {
     dot.className = 'status-dot off';
     text.textContent = '服务未启动';
     hint.classList.remove('hidden');
+  }
+
+  // ==================== 更新检测 ====================
+
+  async checkForUpdate(manual = false) {
+    const repo = 'cxcboss/video-publish-extension';
+    const currentVersion = document.getElementById('version-text').textContent.replace('v', '');
+    const updateBtn = document.getElementById('update-btn');
+
+    if (manual) {
+      updateBtn.textContent = '...';
+      updateBtn.disabled = true;
+    }
+
+    try {
+      const r = await fetch(`https://api.github.com/repos/${repo}/releases/latest`);
+      if (!r.ok) throw new Error('API 请求失败');
+      const release = await r.json();
+      const latestVersion = (release.tag_name || '').replace('v', '');
+
+      if (!latestVersion || latestVersion === currentVersion) {
+        if (manual) this.updateStatus('已是最新版本');
+        updateBtn.classList.remove('has-update');
+        return;
+      }
+
+      // 简单版本号比较
+      const curParts = currentVersion.split('.').map(Number);
+      const latParts = latestVersion.split('.').map(Number);
+      let isNewer = false;
+      for (let i = 0; i < 3; i++) {
+        if ((latParts[i] || 0) > (curParts[i] || 0)) { isNewer = true; break; }
+        if ((latParts[i] || 0) < (curParts[i] || 0)) break;
+      }
+
+      if (isNewer) {
+        updateBtn.classList.add('has-update');
+        this.showUpdatePanel(latestVersion, release.body || '', release.zipball_url);
+      } else {
+        if (manual) this.updateStatus('已是最新版本');
+      }
+    } catch (e) {
+      if (manual) this.updateStatus('检测更新失败');
+    } finally {
+      updateBtn.textContent = '↻';
+      updateBtn.disabled = false;
+    }
+  }
+
+  showUpdatePanel(version, changelog, downloadUrl) {
+    const panel = document.getElementById('update-panel');
+    document.getElementById('update-panel-version').textContent = `当前 v${document.getElementById('version-text').textContent.replace('v', '')} → 新版 v${version}`;
+    document.getElementById('update-panel-changelog').textContent = changelog || '暂无更新日志';
+    document.getElementById('update-do-btn').dataset.url = downloadUrl || '';
+    panel.classList.remove('hidden');
+  }
+
+  async doUpdate() {
+    const url = document.getElementById('update-do-btn').dataset.url;
+    if (!url) return;
+    this.updateStatus('正在下载更新包...');
+
+    try {
+      // 用 chrome.downloads 下载 ZIP
+      await chrome.downloads.download({ url, filename: 'video-publish-extension.zip', saveAs: false });
+      this.updateStatus('下载完成！请在扩展管理页重新加载');
+      // 打开扩展管理页面
+      chrome.tabs.create({ url: 'chrome://extensions' });
+    } catch (e) {
+      this.updateStatus('下载失败: ' + e.message);
+    }
   }
 
   // ==================== 设置管理 ====================
