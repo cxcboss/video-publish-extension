@@ -6,3 +6,19 @@ Thumbs.db
 target/
 .build/
 *.app/
+*.exe
+*.dmg
+
+# Flutter
+win_app/build/
+win_app/.dart_tool/
+win_app/.packages
+win_app/.flutter-plugins
+win_app/.flutter-plugins-dependencies
+win_app/pubspec.lock
+
+# Swift build
+mac-app/.build/
+
+# Tauri build artifacts
+tauri-app/src-tauri/target/

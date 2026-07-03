@@ -57,9 +57,9 @@ class _HomePageState extends State<HomePage> {
   }
 
   String get projectRoot {
-    // Windows: exe 在 win_app/build/windows/x64/runner/Release/
-    // 项目根在 exe 之上4层
-    return p.dirname(p.dirname(p.dirname(p.dirname(Platform.executable))));
+    // Flutter release exe 路径: win_app/build/windows/x64/runner/Release/video_publisher_app.exe
+    // 5 层 dirname 到项目根: Release → runner → x64 → build → win_app → 项目根
+    return p.dirname(p.dirname(p.dirname(p.dirname(p.dirname(Platform.executable)))));
   }
 
   String get serverDir => p.join(projectRoot, 'local-server');
@@ -96,10 +96,14 @@ class _HomePageState extends State<HomePage> {
       r'C:\Program Files\nodejs\node.exe',
       r'C:\Program Files (x86)\nodejs\node.exe',
     ];
-    for (final p2 in paths) {
-      if (File(p2).existsSync()) return p2;
+    // 也检查 nvm-windows 和常见安装位置
+    final appData = Platform.environment['APPDATA'] ?? '';
+    final userProfile = Platform.environment['USERPROFILE'] ?? '';
+    if (appData.isNotEmpty) paths.add(p.join(appData, 'nvm', 'current', 'node.exe'));
+    if (userProfile.isNotEmpty) paths.add(p.join(userProfile, '.nvm', 'current', 'node.exe'));
+    for (final path in paths) {
+      if (File(path).existsSync()) return path;
     }
-    // 尝试 where
     try {
       final result = Process.runSync('where', ['node']);
       if (result.exitCode == 0) {
@@ -158,13 +162,15 @@ class _HomePageState extends State<HomePage> {
 
   Future<void> _installDeps() async {
     try {
-      final npmPath = ['npm'].firstWhere((p2) => File(p2).existsSync(), orElse: () => 'npm');
+      final nodePath = _findNode();
+      if (nodePath.isEmpty) { _showToast('✗ 未找到 Node.js'); return; }
+      final npmPath = p.join(p.dirname(nodePath), 'npm.cmd');
       final result = await Process.run(npmPath, ['install'], workingDirectory: serverDir);
       if (result.exitCode == 0) {
         _showToast('✓ 服务依赖安装完成');
         _refreshEnv();
       } else {
-        _showToast('✗ 安装失败');
+        _showToast('✗ 安装失败: ${result.stderr}');
       }
     } catch (e) {
       _showToast('✗ 安装失败: $e');
