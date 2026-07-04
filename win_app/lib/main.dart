@@ -264,13 +264,11 @@ class _HomePageState extends State<HomePage> {
       final r = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 60));
       File(tmpZip).writeAsBytesSync(r.bodyBytes);
 
-      // 解压
-      final result = await Process.run('tar', ['-xf', tmpZip, '-C', tmpExtract]);
-      if (result.exitCode != 0) {
-        // Windows 没有 tar，用 PowerShell
-        await Process.run('powershell', ['-Command',
-          'Expand-Archive -Path "$tmpZip" -DestinationPath "$tmpExtract" -Force']);
-      }
+      // 解压 ZIP（Windows 用 PowerShell）
+      await Process.run('powershell', [
+        '-Command',
+        'Expand-Archive', '-Path', tmpZip, '-DestinationPath', tmpExtract, '-Force'
+      ]);
 
       // 找 manifest.json
       final extractDir = Directory(tmpExtract);
@@ -293,8 +291,8 @@ class _HomePageState extends State<HomePage> {
       await _copyDirectory(Directory(srcDir), dst);
 
       // 清理
-      File(tmpZip).deleteSync(recursive: true, force: true);
-      Directory(tmpExtract).deleteSync(recursive: true, force: true);
+      try { File(tmpZip).deleteSync(recursive: true); } catch (_) {}
+      try { Directory(tmpExtract).deleteSync(recursive: true); } catch (_) {}
 
       _refreshEnv();
       setState(() { updateInfo = null; });
