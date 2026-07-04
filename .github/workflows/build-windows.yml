@@ -3,7 +3,7 @@ name: Build Windows App
 on:
   push:
     branches: [main]
-    paths: ['win_app/**']
+    paths: ['win_app/**', '.github/workflows/build-windows.yml']
   workflow_dispatch:
 
 jobs:
@@ -16,6 +16,12 @@ jobs:
         with:
           flutter-version: '3.27.0'
           channel: stable
+
+      - name: Install Visual Studio Build Tools with C++
+        run: |
+          choco install visualstudio2022buildtools --package-parameters "--add Microsoft.VisualStudio.Workload.VCTools --includeRecommended" -y --no-progress
+        shell: bash
+        timeout-minutes: 20
 
       - name: Install dependencies
         working-directory: win_app
