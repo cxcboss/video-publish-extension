@@ -7,7 +7,7 @@
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
-  <div class="container">
+  <div class="container" id="app-container">
 
     <!-- 顶部状态栏 + 发布按钮 -->
     <div class="topbar">
@@ -16,7 +16,7 @@
         <span class="status-text" id="status-text">检测中...</span>
       </div>
       <button id="publish-btn" class="publish-btn">发布</button>
-      <span class="version" id="version-text">v2.5.3</span>
+      <span class="version" id="version-text">v2.6.0</span>
     </div>
 
     <!-- 发布进度 -->
@@ -29,19 +29,25 @@
     </div>
 
     <!-- 平台选择 -->
-    <div class="section compact">
+    <div class="section compact section-controls">
       <div class="platform-row">
-        <button id="douyin-btn" class="platform-btn">
-          <span>♪</span> 抖音
-        </button>
-        <button id="weixin-btn" class="platform-btn">
-          <span>◈</span> 视频号
-        </button>
+        <div class="platform-group">
+          <button id="douyin-btn" class="platform-btn">
+            <span>♪</span> 抖音
+          </button>
+          <button class="open-link-btn" id="open-douyin" title="打开抖音创作者中心">打开</button>
+        </div>
+        <div class="platform-group">
+          <button id="weixin-btn" class="platform-btn">
+            <span>◈</span> 视频号
+          </button>
+          <button class="open-link-btn" id="open-weixin" title="打开视频号创作平台">打开</button>
+        </div>
       </div>
     </div>
 
     <!-- 定时发布 -->
-    <div class="section compact">
+    <div class="section compact section-controls">
       <div class="row-between">
         <label class="toggle-label">
           <input type="checkbox" id="scheduled-publish">
@@ -56,7 +62,7 @@
     </div>
 
     <!-- 自动重试 -->
-    <div class="section compact">
+    <div class="section compact section-controls">
       <div class="row-between">
         <label class="toggle-label">
           <input type="checkbox" id="auto-retry">
@@ -72,7 +78,7 @@
     </div>
 
     <!-- AI 生成（含 AI 配置折叠区） -->
-    <div class="section compact">
+    <div class="section compact section-controls">
       <div class="row-between clickable" id="auto-generate-row">
         <label class="toggle-label" onclick="event.stopPropagation()">
           <input type="checkbox" id="auto-generate">
@@ -112,7 +118,7 @@
     </div>
 
     <!-- 视频目录 -->
-    <div class="section compact">
+    <div class="section compact section-controls">
       <div class="path-row">
         <input type="text" id="video-path" placeholder="视频目录路径 /Users/xxx/Videos">
         <button id="refresh-btn" class="path-btn refresh" title="刷新列表">↻</button>
@@ -121,7 +127,7 @@
       <div id="video-list" class="video-list"></div>
     </div>
 
-    <!-- 发布队列 -->
+    <!-- 发布队列（发布模式下全屏展示） -->
     <div class="section compact" id="queue-section">
       <div class="section-header">
         <span>发布队列</span>

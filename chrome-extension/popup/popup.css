@@ -68,6 +68,16 @@ body {
 .container::-webkit-scrollbar { width: 3px; }
 .container::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 
+/* 发布模式：隐藏 controls，队列全屏 */
+.container.publishing-mode .section-controls { display: none !important; }
+.container.publishing-mode #queue-section {
+  flex: 1;
+  overflow-y: auto;
+}
+.container.publishing-mode .publish-queue {
+  max-height: none;
+}
+
 /* 顶部状态栏 + 发布按钮 */
 .topbar {
   display: flex;
@@ -108,29 +118,6 @@ body {
   color: var(--danger-text);
 }
 
-.update-btn {
-  width: 18px; height: 18px; padding: 0;
-  background: none; border: 1px solid var(--border); border-radius: 4px;
-  color: var(--text-3); font-size: 11px; cursor: pointer; line-height: 1;
-  display: flex; align-items: center; justify-content: center;
-  transition: all 0.15s;
-}
-.update-btn:hover { border-color: var(--text-2); color: var(--text-2); }
-.update-btn.has-update { border-color: var(--dot-on); color: var(--dot-on); }
-
-/* 更新提示面板 */
-.update-panel { background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 10px; margin: 0 0 6px 0; }
-.update-panel-header { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; font-size: 12px; font-weight: 600; color: var(--text); }
-.update-icon { font-size: 14px; }
-.update-panel-body { margin-bottom: 8px; }
-.update-panel-version { font-size: 11px; color: var(--text-2); margin-bottom: 4px; }
-.update-changelog { font-size: 10px; color: var(--text-3); max-height: 80px; overflow-y: auto; line-height: 1.5; white-space: pre-wrap; padding: 4px 6px; background: var(--bg-input); border-radius: 4px; }
-.update-panel-actions { display: flex; gap: 6px; }
-.update-do-btn { flex: 1; padding: 5px 0; border: none; border-radius: 4px; font-size: 11px; font-weight: 600; cursor: pointer; background: var(--dot-on); color: #fff; }
-.update-do-btn:hover { opacity: 0.9; }
-.update-dismiss-btn { padding: 5px 10px; border: 1px solid var(--border); border-radius: 4px; font-size: 11px; cursor: pointer; background: none; color: var(--text-3); }
-.update-dismiss-btn:hover { border-color: var(--text-2); color: var(--text-2); }
-
 /* 进度条 */
 .progress-bar {
   height: 3px;
@@ -159,23 +146,9 @@ body {
 .section.compact { padding: 8px 10px; }
 .section.hidden { display: none; }
 
-/* 可折叠 section */
-.collapsible .section-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  cursor: pointer;
-  font-size: 12px;
-  color: var(--text-2);
-  user-select: none;
-}
-.collapsible .section-header:hover { color: var(--text); }
-.collapsible .arrow { font-size: 10px; transition: transform 0.2s; }
-.collapsible .arrow.open { transform: rotate(90deg); }
-.collapsible .section-body { margin-top: 8px; }
-
 /* 平台选择 */
 .platform-row { display: flex; gap: 8px; }
+.platform-group { display: flex; gap: 4px; flex: 1; }
 .platform-btn {
   flex: 1;
   padding: 8px 0;
@@ -195,6 +168,18 @@ body {
   color: var(--accent-text);
   font-weight: 600;
 }
+.open-link-btn {
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text-3);
+  cursor: pointer;
+  font-size: 11px;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+.open-link-btn:hover { border-color: var(--accent); color: var(--accent); }
 
 /* row-between */
 .row-between { display: flex; justify-content: space-between; align-items: center; }
@@ -264,9 +249,9 @@ body {
 }
 .path-btn.refresh:hover { border-color: var(--text-3); color: var(--text); }
 
-/* 视频列表 */
+/* 视频列表 - 显示约10.5个视频 */
 .video-list {
-  max-height: 140px; overflow-y: auto;
+  max-height: 286px; overflow-y: auto;
   margin-top: 6px; border: 1px solid var(--border); border-radius: 5px; padding: 3px;
 }
 .video-list::-webkit-scrollbar { width: 2px; }
@@ -323,6 +308,13 @@ body {
 .test-result.fail { background: rgba(244,67,54,0.1); color: var(--dot-off); border: 1px solid rgba(244,67,54,0.3); }
 
 /* 队列 */
+.section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  color: var(--text-2);
+}
 .queue-count {
   background: var(--border); color: var(--text-2);
   padding: 1px 6px; border-radius: 8px; font-size: 10px;
@@ -337,8 +329,39 @@ body {
 .queue-item .dot.pending { background: var(--dot); }
 .queue-item .dot.done { background: var(--dot-on); }
 .queue-item .dot.error { background: var(--dot-off); }
-.queue-item .dot.publishing { background: var(--text); animation: pulse 1s infinite; }
+.queue-item .dot.publishing { background: #FFC107; animation: pulse 1s infinite; }
+.queue-item .dot.skipped { background: var(--text-3); }
+.queue-item .queue-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.queue-item .queue-status { font-size: 10px; color: var(--text-3); margin-left: 4px; flex-shrink: 0; }
+
+/* 发布模式下的队列项 - 更大更清晰 */
+.publishing-mode .queue-item {
+  padding: 8px 10px;
+  font-size: 13px;
+}
+.publishing-mode .queue-item .dot {
+  width: 8px; height: 8px;
+}
 @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+/* 跳过提示 */
+.skip-hint {
+  position: fixed; bottom: 0; left: 0; right: 0;
+  background: var(--bg-card); border-top: 1px solid var(--border);
+  padding: 12px; z-index: 100;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.skip-hint-text { font-size: 12px; color: var(--text); text-align: center; }
+.skip-hint-actions { display: flex; gap: 8px; justify-content: center; }
+.skip-hint-actions button {
+  padding: 6px 20px; border-radius: 5px; font-size: 12px; cursor: pointer; border: none; font-weight: 600;
+}
+.skip-hint-actions .skip-confirm {
+  background: var(--danger); color: var(--danger-text);
+}
+.skip-hint-actions .skip-cancel {
+  background: var(--bg-input); color: var(--text-2); border: 1px solid var(--border);
+}
 
 .hidden { display: none !important; }
 

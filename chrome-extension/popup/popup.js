@@ -1,14 +1,3 @@
-/**
- * AI 视频发布助手 - Popup 控制器
- *
- * 负责：
- * 1. UI 交互（平台选择、开关、目录浏览）
- * 2. 设置持久化（chrome.storage.local）
- * 3. 发布流程触发（通过 background.js）
- * 4. 进度监控（轮询 + 消息监听）
- * 5. AI 连接测试
- * 6. 服务状态检测 + 启动提示
- */
 class PopupController {
   constructor() {
     this.selectedPlatform = null;
@@ -18,6 +7,7 @@ class PopupController {
     this.videos = [];
     this.loadTimeout = null;
     this.draggedItem = null;
+    this.videoStatuses = []; // 每个视频的发布状态
     this.init();
   }
 
@@ -29,12 +19,18 @@ class PopupController {
     this.listenProgress();
   }
 
-  // ==================== 事件绑定 ====================
-
   bindEvents() {
     // 平台选择
     document.getElementById('douyin-btn').addEventListener('click', () => this.selectPlatform('douyin'));
     document.getElementById('weixin-btn').addEventListener('click', () => this.selectPlatform('weixin'));
+
+    // 打开创作者中心
+    document.getElementById('open-douyin').addEventListener('click', () => {
+      chrome.tabs.create({ url: 'https://creator.douyin.com/creator-micro/home' });
+    });
+    document.getElementById('open-weixin').addEventListener('click', () => {
+      chrome.tabs.create({ url: 'https://channels.weixin.qq.com/platform' });
+    });
 
     // 视频目录
     document.getElementById('browse-btn').addEventListener('click', () => this.showDirBrowser());
@@ -61,7 +57,7 @@ class PopupController {
       document.getElementById('retry-count-wrap').classList.toggle('hidden', !e.target.checked);
     });
 
-    // AI 配置折叠 - 整行可点击（label 内的点击除外，避免 toggle 冲突）
+    // AI 配置折叠
     document.getElementById('auto-generate-row').addEventListener('click', () => {
       const body = document.getElementById('ai-config-wrap');
       const arrow = document.getElementById('ai-arrow');
@@ -201,11 +197,13 @@ class PopupController {
       if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error || r.status); }
       const d = await r.json();
       if (d.videos?.length > 0) {
-        this.videos = d.videos;
-        this.selectedVideos = [...d.videos];
-        this.renderVideoList(d.videos);
+        // 自动按数字前缀排序
+        const sorted = this.sortVideosByNumber(d.videos);
+        this.videos = sorted;
+        this.selectedVideos = [...sorted];
+        this.renderVideoList(sorted);
         this.renderQueue();
-        this.updateStatus(`已加载 ${d.videos.length} 个视频`);
+        this.updateStatus(`已加载 ${sorted.length} 个视频`);
       } else {
         this.updateStatus(d.error || '未找到视频');
         this.clearList();
@@ -214,6 +212,42 @@ class PopupController {
       this.updateStatus(e.message.includes('Failed') ? '服务未连接' : `错误: ${e.message}`);
       this.clearList();
     }
+  }
+
+  /**
+   * 按数字前缀排序视频：
+   * 如果文件名开头是数字（如 "01.mp4", "12-xxx.mp4"），按数字大小排序
+   * 否则保持原有顺序
+   */
+  sortVideosByNumber(videos) {
+    if (!videos || videos.length === 0) return videos;
+
+    // 检查是否所有文件名都有数字前缀
+    const hasNumberPrefix = v => /^\d+/.test(v.name);
+
+    const allHaveNumbers = videos.every(hasNumberPrefix);
+    if (allHaveNumbers) {
+      return [...videos].sort((a, b) => {
+        const numA = parseInt(a.name.match(/^(\d+)/)[1], 10);
+        const numB = parseInt(b.name.match(/^(\d+)/)[1], 10);
+        return numA - numB;
+      });
+    }
+
+    // 部分有数字前缀：有数字的排前面，按数字排序
+    const withNum = [];
+    const withoutNum = [];
+    videos.forEach(v => {
+      if (hasNumberPrefix(v)) withNum.push(v);
+      else withoutNum.push(v);
+    });
+    withNum.sort((a, b) => {
+      const numA = parseInt(a.name.match(/^(\d+)/)[1], 10);
+      const numB = parseInt(b.name.match(/^(\d+)/)[1], 10);
+      return numA - numB;
+    });
+
+    return [...withNum, ...withoutNum];
   }
 
   clearList() {
@@ -280,9 +314,58 @@ class PopupController {
       c.innerHTML = '<div style="color:var(--text-3);font-size:10px;text-align:center;padding:6px">无视频</div>';
       return;
     }
-    c.innerHTML = this.selectedVideos.map((v, i) => `
-      <div class="queue-item"><span class="dot pending"></span>${i+1}. ${v.name}</div>
-    `).join('');
+    c.innerHTML = this.selectedVideos.map((v, i) => {
+      const status = this.videoStatuses[i] || 'pending';
+      return `<div class="queue-item" data-index="${i}">
+        <span class="dot ${status}"></span>
+        <span class="queue-name">${i+1}. ${v.name}</span>
+        <span class="queue-status">${this._statusLabel(status)}</span>
+      </div>`;
+    }).join('');
+
+    // 发布模式下，点击排队中的视频可以跳过
+    if (this.isPublishing) {
+      c.querySelectorAll('.queue-item').forEach(item => {
+        const idx = parseInt(item.dataset.index);
+        if (this.videoStatuses[idx] === 'pending') {
+          item.style.cursor = 'pointer';
+          item.addEventListener('click', () => this.promptSkip(idx));
+        }
+      });
+    }
+  }
+
+  _statusLabel(status) {
+    const labels = { pending: '等待中', publishing: '发布中', done: '已发布', error: '失败', skipped: '已跳过' };
+    return labels[status] || '';
+  }
+
+  promptSkip(index) {
+    if (this.videoStatuses[index] !== 'pending') return;
+
+    // 移除旧的 skip-hint
+    const old = document.querySelector('.skip-hint');
+    if (old) old.remove();
+
+    const v = this.selectedVideos[index];
+    const hint = document.createElement('div');
+    hint.className = 'skip-hint';
+    hint.innerHTML = `
+      <div class="skip-hint-text">跳过「${v.name}」后将不再发布此视频</div>
+      <div class="skip-hint-actions">
+        <button class="skip-cancel">取消</button>
+        <button class="skip-confirm">跳过</button>
+      </div>`;
+    document.body.appendChild(hint);
+
+    hint.querySelector('.skip-cancel').onclick = () => hint.remove();
+    hint.querySelector('.skip-confirm').onclick = () => {
+      this.videoStatuses[index] = 'skipped';
+      this.renderQueue();
+      hint.remove();
+      // 通知 background 跳过这个视频
+      chrome.runtime.sendMessage({ action: 'skipVideo', index });
+    };
   }
 
   fmtSize(b) {
@@ -293,7 +376,7 @@ class PopupController {
     return (b/1073741824).toFixed(1) + 'G';
   }
 
-  // ==================== 发布按钮（合并 start/stop） ====================
+  // ==================== 发布按钮 ====================
 
   togglePublish() {
     if (this.isPublishing) this.stopPublish();
@@ -302,9 +385,17 @@ class PopupController {
 
   setPublishButtonState(running) {
     const btn = document.getElementById('publish-btn');
+    const container = document.getElementById('app-container');
     this.isPublishing = running;
-    if (running) { btn.textContent = '停止'; btn.classList.add('running'); }
-    else { btn.textContent = '发布'; btn.classList.remove('running'); }
+    if (running) {
+      btn.textContent = '停止';
+      btn.classList.add('running');
+      container.classList.add('publishing-mode');
+    } else {
+      btn.textContent = '发布';
+      btn.classList.remove('running');
+      container.classList.remove('publishing-mode');
+    }
   }
 
   // ==================== 进度条 ====================
@@ -324,8 +415,8 @@ class PopupController {
   }
 
   updateQueueStatus(index, status) {
-    const items = document.querySelectorAll('.queue-item .dot');
-    if (items[index]) items[index].className = 'dot ' + status;
+    this.videoStatuses[index] = status;
+    this.renderQueue();
   }
 
   listenProgress() {
@@ -349,6 +440,7 @@ class PopupController {
         this.setPublishButtonState(false);
         this.hideProgress();
         this.updateStatus('全部完成');
+        this.videoStatuses = [];
       }, 1500);
     }
   }
@@ -369,6 +461,10 @@ class PopupController {
     await this.saveSettings();
     this.setPublishButtonState(true);
 
+    // 初始化所有视频状态
+    this.videoStatuses = this.selectedVideos.map(() => 'pending');
+    this.renderQueue();
+
     const settings = {
       autoGenerate: autoGen,
       aiProvider: document.getElementById('ai-provider').value,
@@ -381,16 +477,12 @@ class PopupController {
       maxRetries: parseInt(document.getElementById('max-retries').value) || 1
     };
 
-    // 构建进度步骤
+    // 显示进度
     const steps = [];
     for (let i = 0; i < this.selectedVideos.length; i++) {
-      steps.push(`[${i+1}/${this.selectedVideos.length}] 上传: ${this.selectedVideos[i].name}`);
-      if (autoGen) steps.push(`[${i+1}/${this.selectedVideos.length}] AI 生成文案...`);
-      steps.push(`[${i+1}/${this.selectedVideos.length}] 填写信息...`);
-      steps.push(`[${i+1}/${this.selectedVideos.length}] 发布中...`);
+      steps.push(`[${i+1}/${this.selectedVideos.length}] ${this.selectedVideos[i].name}`);
     }
     this.showProgress(steps, 0);
-    this.renderQueue();
 
     try {
       const r = await chrome.runtime.sendMessage({
@@ -412,7 +504,11 @@ class PopupController {
     this.setPublishButtonState(false);
     this.hideProgress();
     this.updateStatus('已停止');
-    document.querySelectorAll('.queue-item .dot').forEach(d => d.className = 'dot pending');
+    // 标记未完成的视频为停止
+    this.videoStatuses = this.videoStatuses.map(s =>
+      s === 'pending' || s === 'publishing' ? 'pending' : s
+    );
+    this.renderQueue();
   }
 
   async pollPublishState() {

@@ -11,7 +11,12 @@ let publishState = {
   expectedTimestamp: null,
   debuggerAttached: false,
   publishRecords: [],
-  waitingForNavigation: false
+  waitingForNavigation: false,
+  retryCounts: {},
+  publishStartTime: null,
+  timeoutTimer: null,
+  nextVideoTimer: null,
+  skippedIndices: new Set()
 };
 
 let debuggerTargets = new Map();
@@ -62,7 +67,7 @@ async function detachDebugger(tabId) {
   if (!debuggerTargets.has(tabId)) {
     return;
   }
-  
+
   try {
     await chrome.debugger.detach({ tabId });
     debuggerTargets.delete(tabId);
@@ -75,30 +80,30 @@ chrome.debugger.onEvent.addListener(async (source, method, params) => {
   if (method === 'Fetch.requestPaused') {
     if (params.request.url.includes('post_create') && publishState.expectedTimestamp) {
       let modifiedBodyBase64 = null;
-      
+
       if (params.request.postData) {
         try {
           const bodyObj = JSON.parse(params.request.postData);
           const scheduledTimestampSeconds = Math.floor(publishState.expectedTimestamp / 1000);
-          
+
           bodyObj.effectiveTime = scheduledTimestampSeconds;
           modifiedBodyBase64 = btoa(unescape(encodeURIComponent(JSON.stringify(bodyObj))));
-          
+
           console.log('[Background] 定时发布时间已注入:', new Date(publishState.expectedTimestamp).toLocaleString('zh-CN'));
         } catch (e) {
           console.error('[Background] 修改请求体失败:', e.message);
         }
       }
-      
+
       try {
         const continueParams = {
           requestId: params.requestId
         };
-        
+
         if (modifiedBodyBase64) {
           continueParams.postData = modifiedBodyBase64;
         }
-        
+
         await chrome.debugger.sendCommand(source, 'Fetch.continueRequest', continueParams);
       } catch (error) {
         console.error('[Background] 继续请求失败:', error.message);
@@ -110,7 +115,7 @@ chrome.debugger.onEvent.addListener(async (source, method, params) => {
       }
       return;
     }
-    
+
     try {
       await chrome.debugger.sendCommand(source, 'Fetch.continueRequest', {
         requestId: params.requestId
@@ -125,7 +130,6 @@ chrome.debugger.onDetach.addListener((source) => {
   }
 });
 
-// 点击工具栏图标时自动打开侧边栏
 chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -135,41 +139,42 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         .then(() => sendResponse({ success: true }))
         .catch(error => sendResponse({ success: false, error: error.message }));
       return true;
-      
+
     case 'generateContent':
       generateAIContent(message.videoName, message.settings)
         .then(result => sendResponse(result))
         .catch(error => sendResponse({ topics: [], description: '', error: error.message }));
       return true;
-      
+
     case 'publishProgress':
       handlePublishProgress(message);
       sendResponse({ success: true });
       break;
-      
+
     case 'getPublishState':
       sendResponse(publishState);
       break;
-      
+
     case 'stopPublish':
-      clearPublishTimeout();
-      publishState.isPublishing = false;
-      if (publishState.targetTabId) {
-        detachDebugger(publishState.targetTabId);
-      }
-      publishState.targetTabId = null;
+      stopPublishCompletely();
       sendResponse({ success: true });
       break;
-      
+
+    case 'skipVideo':
+      publishState.skippedIndices.add(message.index);
+      console.log('[Background] 用户跳过视频索引:', message.index);
+      sendResponse({ success: true });
+      break;
+
     case 'ping':
       sendResponse({ ready: true, state: publishState });
       break;
-      
+
     case 'getScheduledTime':
       const scheduledTime = calculateScheduledTime(message.videoIndex, message.firstVideoScheduled);
       sendResponse({ scheduledTime: scheduledTime });
       break;
-      
+
     case 'setExpectedTimestamp':
       publishState.expectedTimestamp = message.timestamp;
       console.log('[Background] 设置定时发布时间戳:', message.timestamp);
@@ -187,18 +192,51 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ success: true });
       break;
   }
-  
+
   return true;
 });
 
+/**
+ * 完全停止发布：清除所有计时器、关闭标签、重置状态
+ */
+function stopPublishCompletely() {
+  console.log('[Background] 完全停止发布流程');
+
+  // 1. 标记为非发布状态
+  publishState.isPublishing = false;
+
+  // 2. 清除所有计时器
+  clearPublishTimeout();
+  if (publishState.nextVideoTimer) {
+    clearTimeout(publishState.nextVideoTimer);
+    publishState.nextVideoTimer = null;
+  }
+
+  // 3. 分离并关闭标签页
+  if (publishState.targetTabId) {
+    detachDebugger(publishState.targetTabId);
+    chrome.tabs.remove(publishState.targetTabId).catch(() => {});
+    publishState.targetTabId = null;
+  }
+
+  // 4. 重置状态
+  publishState.debuggerAttached = false;
+  publishState.commandSent = false;
+  publishState.waitingForNavigation = false;
+  publishState.timeoutTimer = null;
+  publishState.nextVideoTimer = null;
+
+  console.log('[Background] 发布已完全停止');
+}
+
 async function handleStartPublishFlow(message) {
   let initialScheduledTime = null;
-  
+
   if (message.settings.scheduledPublish && message.settings.scheduleTime) {
     initialScheduledTime = message.settings.scheduleTime.replace('T', ' ');
     console.log('[Background] 用户指定定时发布时间:', initialScheduledTime);
   }
-  
+
   publishState = {
     isPublishing: true,
     videos: message.videos,
@@ -215,12 +253,14 @@ async function handleStartPublishFlow(message) {
     waitingForNavigation: false,
     retryCounts: {},
     publishStartTime: null,
-    timeoutTimer: null
+    timeoutTimer: null,
+    nextVideoTimer: null,
+    skippedIndices: new Set()
   };
-  
+
   console.log('[Background] 开始发布流程，共', message.videos.length, '个视频');
   console.log('[Background] 定时发布:', message.settings.scheduledPublish ? '开启' : '关闭');
-  
+
   await publishNextVideo();
 }
 
@@ -229,14 +269,22 @@ async function publishNextVideo() {
     return;
   }
 
+  // 跳过被标记跳过的视频
+  while (publishState.currentIndex < publishState.videos.length &&
+         publishState.skippedIndices.has(publishState.currentIndex)) {
+    console.log('[Background] 跳过视频索引:', publishState.currentIndex);
+    publishState.currentIndex++;
+  }
+
   if (publishState.currentIndex >= publishState.videos.length) {
     await finishAllPublish();
     return;
   }
 
   const video = publishState.videos[publishState.currentIndex];
-  const idx = publishState.currentIndex + 1;
-  const total = publishState.videos.length;
+
+  // 通知 popup 当前正在发布
+  sendProgress(`发布中: ${video.name}`, 'publishing', publishState.currentIndex, publishState.videos.length);
 
   // 清除上一个视频的超时计时器
   clearPublishTimeout();
@@ -259,14 +307,9 @@ async function publishNextVideo() {
     await attachDebugger(tab.id);
   }
 
-  // 启动超时计时器
   startPublishTimeout();
 }
 
-/**
- * 启动单个视频的超时计时器（30秒）
- * 超时后关闭当前标签页并重试
- */
 function startPublishTimeout() {
   clearPublishTimeout();
   if (!publishState.settings.autoRetry) return;
@@ -283,21 +326,18 @@ function startPublishTimeout() {
 
     if (currentRetries < maxRetries) {
       publishState.retryCounts[idx] = currentRetries + 1;
-      sendProgress(`超时重试 (${currentRetries + 1}/${maxRetries})`, 'retrying', idx + 1, publishState.videos.length);
+      sendProgress(`超时重试 (${currentRetries + 1}/${maxRetries})`, 'publishing', idx, publishState.videos.length);
 
-      // 关闭当前标签页
       detachDebugger(publishState.targetTabId);
       chrome.tabs.remove(publishState.targetTabId).catch(() => {});
       publishState.targetTabId = null;
       publishState.debuggerAttached = false;
       publishState.commandSent = false;
 
-      // 等待后重新发布同一个视频
       await new Promise(r => setTimeout(r, 3000));
       await publishNextVideo();
     } else {
-      // 超过最大重试次数，跳过这个视频
-      sendProgress(`重试${maxRetries}次仍超时，跳过`, 'skipped', idx + 1, publishState.videos.length);
+      sendProgress(`重试${maxRetries}次仍超时，跳过`, 'error', idx, publishState.videos.length);
 
       detachDebugger(publishState.targetTabId);
       chrome.tabs.remove(publishState.targetTabId).catch(() => {});
@@ -323,20 +363,20 @@ async function finishAllPublish() {
   console.log('[Background] 所有视频发布完成，保存记录并打开历史页面');
   sendProgress('全部完成', 'done', 1, 1, true);
   publishState.isPublishing = false;
-  
+
   if (publishState.targetTabId) {
     detachDebugger(publishState.targetTabId);
     await new Promise(resolve => setTimeout(resolve, 3000));
     chrome.tabs.remove(publishState.targetTabId).catch(() => {});
     publishState.targetTabId = null;
   }
-  
+
   if (publishState.publishRecords.length > 0) {
     for (const record of publishState.publishRecords) {
       await savePublishRecord(record);
     }
   }
-  
+
   chrome.tabs.create({ url: 'http://localhost:3000/' });
   console.log('[Background] 已打开发布历史页面');
 }
@@ -345,32 +385,27 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   if (!publishState.isPublishing) {
     return;
   }
-  
+
   if (publishState.targetTabId !== tabId) {
     return;
   }
-  
+
   const needDebugger = publishState.platform === 'douyin' || (publishState.platform === 'weixin' &&
     (publishState.settings.scheduledPublish || publishState.videos.length > 1));
-  
+
   if (needDebugger && !publishState.debuggerAttached) {
     if (changeInfo.status === 'loading' || changeInfo.status === 'complete') {
-      console.log('[Background] 尝试附加调试器，页面状态:', changeInfo.status, '原因:', 
-        publishState.settings.scheduledPublish ? '定时发布' : '多视频发布');
       await attachDebugger(tabId);
     }
   }
-  
+
   if (changeInfo.status === 'complete') {
-    console.log('[Background] 标签页加载完成:', tabId, tab.url);
-    
     if (publishState.platform === 'weixin') {
       if (tab.url && tab.url.includes('/platform/post/list')) {
-        console.log('[Background] 检测到页面跳转到列表页，发布成功');
         await handleVideoPublishDone();
         return;
       }
-      
+
       if (tab.url && tab.url.includes('/platform/post/create') && !publishState.commandSent) {
         await sendPublishCommand(tabId);
       }
@@ -381,6 +416,8 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
 });
 
 async function handleDouyinPublishDone(message) {
+  if (!publishState.isPublishing) return;
+
   clearPublishTimeout();
   const video = publishState.videos[publishState.currentIndex];
   const idx = publishState.currentIndex + 1;
@@ -409,15 +446,12 @@ async function handleDouyinPublishDone(message) {
 
   if (publishState.currentIndex < publishState.videos.length) {
     if (oldTabId) {
-      console.log('[Background] 等待3秒后关闭标签页...');
       setTimeout(() => {
         chrome.tabs.remove(oldTabId).catch(() => {});
-        console.log('[Background] 已关闭上一个发布标签页');
       }, 3000);
     }
     publishState.targetTabId = null;
-    console.log('[Background] 等待8秒后发布下一个视频...');
-    setTimeout(() => { publishNextVideo(); }, 8000);
+    publishState.nextVideoTimer = setTimeout(() => { publishNextVideo(); }, 8000);
   } else {
     publishState.targetTabId = oldTabId;
     await finishAllPublish();
@@ -425,14 +459,15 @@ async function handleDouyinPublishDone(message) {
 }
 
 async function handleVideoPublishDone() {
+  if (!publishState.isPublishing) return;
+
   clearPublishTimeout();
   const video = publishState.videos[publishState.currentIndex];
   const idx = publishState.currentIndex + 1;
   const total = publishState.videos.length;
   console.log(`[Background] 视频 ${video.name} 发布完成`);
   sendProgress(`完成: ${video.name}`, 'done', idx, total);
-  console.log('[Background] videoPath:', publishState.videoPath);
-  
+
   const record = {
     videoName: video.name,
     videoPath: publishState.videoPath || '',
@@ -441,31 +476,27 @@ async function handleVideoPublishDone() {
     scheduled: publishState.settings.scheduledPublish || false,
     scheduledTime: publishState.scheduledTime
   };
-  
-  console.log('[Background] 发布记录:', JSON.stringify(record));
+
   publishState.publishRecords.push(record);
-  
+
   const oldTabId = publishState.targetTabId;
-  
+
   if (oldTabId) {
     detachDebugger(oldTabId);
   }
-  
+
   publishState.currentIndex++;
   publishState.debuggerAttached = false;
   publishState.commandSent = false;
-  
+
   if (publishState.currentIndex < publishState.videos.length) {
     if (oldTabId) {
-      console.log('[Background] 等待3秒后关闭标签页...');
       setTimeout(() => {
         chrome.tabs.remove(oldTabId).catch(() => {});
-        console.log('[Background] 已关闭上一个发布标签页');
       }, 3000);
     }
     publishState.targetTabId = null;
-    console.log('[Background] 等待8秒后发布下一个视频...');
-    setTimeout(() => { publishNextVideo(); }, 8000);
+    publishState.nextVideoTimer = setTimeout(() => { publishNextVideo(); }, 8000);
   } else {
     publishState.targetTabId = oldTabId;
     await finishAllPublish();
@@ -473,51 +504,48 @@ async function handleVideoPublishDone() {
 }
 
 async function sendPublishCommand(tabId) {
-  if (publishState.commandSent) {
+  if (publishState.commandSent || !publishState.isPublishing) {
     return;
   }
-  
-  console.log('[Background] 发送发布命令到标签页:', tabId);
-  
+
   let bestTarget = null;
   let maxElements = 0;
-  
+
   for (let attempt = 0; attempt < 15; attempt++) {
     if (!publishState.isPublishing) {
-      console.log('[Background] 发布已取消');
       return;
     }
-    
+
     try {
       const pingResponse = await chrome.tabs.sendMessage(tabId, { action: 'ping' });
-      
+
       if (pingResponse && pingResponse.ready) {
         const elementCount = pingResponse.elementCount || 0;
-        
+
         if (elementCount > maxElements) {
           maxElements = elementCount;
           bestTarget = pingResponse;
         }
-        
+
         if (elementCount > 50) {
           break;
         }
       }
     } catch (error) {}
-    
+
     await sleep(1000);
   }
-  
-  if (!bestTarget || maxElements < 10) {
+
+  if (!bestTarget || maxElements < 10 || !publishState.isPublishing) {
     console.error('[Background] 无法找到有效的content script环境');
     publishState.isPublishing = false;
     return;
   }
-  
+
   publishState.commandSent = true;
-  
+
   const video = publishState.videos[publishState.currentIndex];
-  
+
   try {
     await chrome.tabs.sendMessage(tabId, {
       action: 'startPublish',
@@ -527,8 +555,6 @@ async function sendPublishCommand(tabId) {
       videoIndex: publishState.currentIndex,
       totalVideos: publishState.videos.length
     });
-    
-    console.log('[Background] 发布命令已发送');
   } catch (error) {
     console.error('[Background] 发送发布命令失败:', error);
     publishState.isPublishing = false;
@@ -544,7 +570,7 @@ function sendProgress(step, detail, current, total, done) {
     action: 'progressUpdate',
     step, detail, current, total, done: !!done,
     videoIndex: publishState.currentIndex,
-    status: detail === 'done' ? 'done' : (detail === 'error' ? 'error' : 'publishing')
+    status: detail === 'done' ? 'done' : (detail === 'error' ? 'error' : (detail === 'publishing' ? 'publishing' : 'pending'))
   }).catch(() => {});
 }
 
@@ -588,7 +614,6 @@ async function callAIApi(provider, apiKey, model, prompt) {
   const config = getAIProviderConfig(provider, apiKey, model, prompt);
   if (!config) throw new Error(`未知的 AI Provider: ${provider}`);
 
-  console.log('[Background] 调用AI:', provider, config.url);
   const response = await fetch(config.url, {
     method: 'POST',
     headers: config.headers,
@@ -601,7 +626,6 @@ async function callAIApi(provider, apiKey, model, prompt) {
   }
 
   const data = await response.json();
-  console.log('[Background] AI响应:', JSON.stringify(data).substring(0, 300));
 
   if (data.error) {
     throw new Error(data.error.message || JSON.stringify(data.error));
@@ -619,14 +643,11 @@ async function testAIConnection(provider, apiKey, model) {
     }
     return { success: false, error: 'AI 返回为空' };
   } catch (e) {
-    console.error('[Background] AI测试失败:', e);
     return { success: false, error: e.message };
   }
 }
 
 async function generateAIContent(videoName, settings) {
-  console.log('[Background] 生成AI内容, provider:', settings.aiProvider);
-
   const videoDesc = settings.videoContent || videoName;
   const prompt = `你是短视频文案专家。根据以下视频内容生成发布内容。
 
@@ -662,7 +683,6 @@ async function generateAIContent(videoName, settings) {
 
     return { topics: [], description: '', error: 'AI返回为空' };
   } catch (error) {
-    console.error('[Background] AI调用失败:', error);
     return { topics: [], description: '', error: error.message };
   }
 }
@@ -683,7 +703,7 @@ function extractDescription(text) {
   const lines = text.split('\n')
     .map(line => line.trim())
     .filter(line => line && !line.includes('#') && line.length > 10);
-  
+
   return lines.slice(0, 3).join(' ').substring(0, 200);
 }
 
@@ -693,7 +713,7 @@ function sleep(ms) {
 
 function calculateScheduledTime(videoIndex, firstVideoScheduled = false) {
   let baseTime;
-  
+
   if (videoIndex === 0 && publishState.scheduledTime) {
     baseTime = new Date(publishState.scheduledTime);
   } else if (publishState.scheduledTime) {
@@ -702,30 +722,30 @@ function calculateScheduledTime(videoIndex, firstVideoScheduled = false) {
     baseTime.setMinutes(baseTime.getMinutes() + randomMinutes);
   } else {
     baseTime = new Date();
-    
+
     if (firstVideoScheduled) {
       const initialDelay = 5 + Math.floor(Math.random() * 10);
       baseTime.setMinutes(baseTime.getMinutes() + initialDelay);
     }
-    
+
     if (videoIndex > 0) {
       const randomMinutes = 40 + Math.floor(Math.random() * 49);
       baseTime.setMinutes(baseTime.getMinutes() + randomMinutes);
     }
   }
-  
+
   const year = baseTime.getFullYear();
   const month = String(baseTime.getMonth() + 1).padStart(2, '0');
   const day = String(baseTime.getDate()).padStart(2, '0');
   const hours = String(baseTime.getHours()).padStart(2, '0');
   const minutes = String(baseTime.getMinutes()).padStart(2, '0');
-  
+
   const timeStr = `${year}-${month}-${day} ${hours}:${minutes}`;
-  
+
   publishState.scheduledTime = baseTime.toISOString();
-  
+
   console.log(`[Background] 第${videoIndex + 1}个视频定时时间: ${timeStr}`);
-  
+
   return timeStr;
 }
 
