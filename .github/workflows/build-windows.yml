@@ -8,7 +8,7 @@ on:
 
 jobs:
   build-windows:
-    runs-on: windows-latest
+    runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
 
@@ -17,11 +17,9 @@ jobs:
           flutter-version: '3.27.0'
           channel: stable
 
-      - name: Install Visual Studio Build Tools with C++
-        run: |
-          choco install visualstudio2022buildtools --package-parameters "--add Microsoft.VisualStudio.Workload.VCTools --includeRecommended" -y --no-progress
+      - name: Check Visual Studio
+        run: flutter doctor -v 2>&1 | head -20
         shell: bash
-        timeout-minutes: 20
 
       - name: Install dependencies
         working-directory: win_app
