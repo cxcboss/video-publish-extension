@@ -16,7 +16,19 @@
         <span class="status-text" id="status-text">检测中...</span>
       </div>
       <button id="publish-btn" class="publish-btn">发布</button>
-      <span class="version" id="version-text">v2.6.0</span>
+      <span class="version" id="version-text">v2.6.1</span>
+    </div>
+
+    <!-- 发布中小动画 -->
+    <div id="publish-animation" class="publish-animation hidden">
+      <div class="anim-scene">
+        <div class="anim-box" id="anim-box">📦</div>
+        <div class="anim-person" id="anim-person">
+          <span class="anim-body">🧑‍💻</span>
+        </div>
+        <div class="anim-trail"></div>
+      </div>
+      <div class="anim-label" id="anim-label">发布中...</div>
     </div>
 
     <!-- 发布进度 -->
@@ -35,13 +47,13 @@
           <button id="douyin-btn" class="platform-btn">
             <span>♪</span> 抖音
           </button>
-          <button class="open-link-btn" id="open-douyin" title="打开抖音创作者中心">打开</button>
+          <button class="open-link-btn" id="open-douyin" title="打开抖音创作者中心">↗</button>
         </div>
         <div class="platform-group">
           <button id="weixin-btn" class="platform-btn">
             <span>◈</span> 视频号
           </button>
-          <button class="open-link-btn" id="open-weixin" title="打开视频号创作平台">打开</button>
+          <button class="open-link-btn" id="open-weixin" title="打开视频号创作平台">↗</button>
         </div>
       </div>
     </div>
@@ -77,7 +89,7 @@
       <div class="hint">单个视频任务超时30秒时自动重试</div>
     </div>
 
-    <!-- AI 生成（含 AI 配置折叠区） -->
+    <!-- AI 生成 -->
     <div class="section compact section-controls">
       <div class="row-between clickable" id="auto-generate-row">
         <label class="toggle-label" onclick="event.stopPropagation()">
@@ -87,7 +99,6 @@
         </label>
         <span class="arrow" id="ai-arrow" title="AI 配置">▸</span>
       </div>
-      <!-- AI 配置：点击箭头展开 -->
       <div id="ai-config-wrap" class="hidden">
         <div class="form-row" style="margin-top:8px">
           <label>Provider</label>
@@ -111,7 +122,6 @@
         <button id="test-ai-btn" class="test-btn">测试连接</button>
         <div id="test-result" class="test-result hidden"></div>
       </div>
-      <!-- 视频内容描述 -->
       <div id="video-content-wrap" class="hidden">
         <textarea id="video-content" placeholder="描述视频内容，AI 根据此内容生成话题标签（最多5个）和描述文案"></textarea>
       </div>
@@ -127,7 +137,7 @@
       <div id="video-list" class="video-list"></div>
     </div>
 
-    <!-- 发布队列（发布模式下全屏展示） -->
+    <!-- 发布队列 -->
     <div class="section compact" id="queue-section">
       <div class="section-header">
         <span>发布队列</span>
@@ -136,7 +146,7 @@
       <div id="publish-queue" class="publish-queue"></div>
     </div>
 
-    <!-- 服务启动提示（未连接时显示） -->
+    <!-- 服务启动提示 -->
     <div id="server-hint" class="server-hint hidden">
       <div class="server-hint-title">本地服务未启动</div>
       <code id="server-cmd">cd local-server && node server.js</code>

@@ -7,7 +7,8 @@ class PopupController {
     this.videos = [];
     this.loadTimeout = null;
     this.draggedItem = null;
-    this.videoStatuses = []; // 每个视频的发布状态
+    this.videoStatuses = [];
+    this.skipConfirmIndex = -1;
     this.init();
   }
 
@@ -20,95 +21,52 @@ class PopupController {
   }
 
   bindEvents() {
-    // 平台选择
     document.getElementById('douyin-btn').addEventListener('click', () => this.selectPlatform('douyin'));
     document.getElementById('weixin-btn').addEventListener('click', () => this.selectPlatform('weixin'));
-
-    // 打开创作者中心
-    document.getElementById('open-douyin').addEventListener('click', () => {
-      chrome.tabs.create({ url: 'https://creator.douyin.com/creator-micro/home' });
-    });
-    document.getElementById('open-weixin').addEventListener('click', () => {
-      chrome.tabs.create({ url: 'https://channels.weixin.qq.com/platform' });
-    });
-
-    // 视频目录
+    document.getElementById('open-douyin').addEventListener('click', () => chrome.tabs.create({ url: 'https://creator.douyin.com/creator-micro/home' }));
+    document.getElementById('open-weixin').addEventListener('click', () => chrome.tabs.create({ url: 'https://channels.weixin.qq.com/platform' }));
     document.getElementById('browse-btn').addEventListener('click', () => this.showDirBrowser());
-    document.getElementById('refresh-btn').addEventListener('click', () => {
-      if (this.videoPath) this.loadVideos(this.videoPath);
-    });
-
-    // 发布按钮
+    document.getElementById('refresh-btn').addEventListener('click', () => { if (this.videoPath) this.loadVideos(this.videoPath); });
     document.getElementById('publish-btn').addEventListener('click', () => this.togglePublish());
-
-    // 定时发布开关
     document.getElementById('scheduled-publish').addEventListener('change', (e) => {
       document.getElementById('schedule-time-wrap').classList.toggle('hidden', !e.target.checked);
       this.updateScheduleHint();
     });
-
-    // AI 生成开关
     document.getElementById('auto-generate').addEventListener('change', (e) => {
       document.getElementById('video-content-wrap').classList.toggle('hidden', !e.target.checked);
     });
-
-    // 自动重试开关
     document.getElementById('auto-retry').addEventListener('change', (e) => {
       document.getElementById('retry-count-wrap').classList.toggle('hidden', !e.target.checked);
     });
-
-    // AI 配置折叠
     document.getElementById('auto-generate-row').addEventListener('click', () => {
-      const body = document.getElementById('ai-config-wrap');
-      const arrow = document.getElementById('ai-arrow');
-      body.classList.toggle('hidden');
-      arrow.classList.toggle('open');
+      document.getElementById('ai-config-wrap').classList.toggle('hidden');
+      document.getElementById('ai-arrow').classList.toggle('open');
     });
-
-    // AI 测试按钮
     document.getElementById('test-ai-btn').addEventListener('click', () => this.testAI());
-
-    // 路径输入（延迟加载）
     const pathInput = document.getElementById('video-path');
     pathInput.addEventListener('input', (e) => {
       this.videoPath = e.target.value;
       if (this.loadTimeout) clearTimeout(this.loadTimeout);
-      this.loadTimeout = setTimeout(() => {
-        if (e.target.value.trim()) this.loadVideos(e.target.value.trim());
-      }, 600);
+      this.loadTimeout = setTimeout(() => { if (e.target.value.trim()) this.loadVideos(e.target.value.trim()); }, 600);
     });
     pathInput.addEventListener('keypress', (e) => {
-      if (e.key === 'Enter') {
-        if (this.loadTimeout) clearTimeout(this.loadTimeout);
-        this.loadVideos(e.target.value);
-      }
+      if (e.key === 'Enter') { if (this.loadTimeout) clearTimeout(this.loadTimeout); this.loadVideos(e.target.value); }
     });
   }
 
   // ==================== 服务状态 ====================
-
   async checkServerStatus() {
     const dot = document.getElementById('status-dot');
     const text = document.getElementById('status-text');
     const hint = document.getElementById('server-hint');
-
     try {
       const r = await fetch('http://localhost:3000/health');
-      if (r.ok) {
-        dot.className = 'status-dot on';
-        text.textContent = '服务已连接';
-        hint.classList.add('hidden');
-        return;
-      }
+      if (r.ok) { dot.className = 'status-dot on'; text.textContent = '服务已连接'; hint.classList.add('hidden'); return; }
     } catch (_) {}
-
-    dot.className = 'status-dot off';
-    text.textContent = '服务未启动';
-    hint.classList.remove('hidden');
+    dot.className = 'status-dot off'; text.textContent = '服务未启动'; hint.classList.remove('hidden');
   }
 
   // ==================== 设置管理 ====================
-
   async loadSettings() {
     try {
       const r = await chrome.storage.local.get([
@@ -116,29 +74,16 @@ class PopupController {
         'autoGenerate', 'videoContent', 'scheduledPublish', 'scheduleTime',
         'autoRetry', 'maxRetries'
       ]);
-      if (r.videoPath) {
-        document.getElementById('video-path').value = r.videoPath;
-        this.videoPath = r.videoPath;
-        this.loadVideos(r.videoPath);
-      }
+      if (r.videoPath) { document.getElementById('video-path').value = r.videoPath; this.videoPath = r.videoPath; this.loadVideos(r.videoPath); }
       if (r.aiProvider) document.getElementById('ai-provider').value = r.aiProvider;
       if (r.aiKey) document.getElementById('ai-key').value = r.aiKey;
       if (r.aiModel) document.getElementById('ai-model').value = r.aiModel;
-      if (r.autoGenerate) {
-        document.getElementById('auto-generate').checked = true;
-        document.getElementById('video-content-wrap').classList.remove('hidden');
-      }
+      if (r.autoGenerate) { document.getElementById('auto-generate').checked = true; document.getElementById('video-content-wrap').classList.remove('hidden'); }
       if (r.videoContent) document.getElementById('video-content').value = r.videoContent;
-      if (r.scheduledPublish) {
-        document.getElementById('scheduled-publish').checked = true;
-        document.getElementById('schedule-time-wrap').classList.remove('hidden');
-      }
+      if (r.scheduledPublish) { document.getElementById('scheduled-publish').checked = true; document.getElementById('schedule-time-wrap').classList.remove('hidden'); }
       if (r.scheduleTime) document.getElementById('schedule-time').value = r.scheduleTime;
       else this.setDefaultScheduleTime();
-      if (r.autoRetry) {
-        document.getElementById('auto-retry').checked = true;
-        document.getElementById('retry-count-wrap').classList.remove('hidden');
-      }
+      if (r.autoRetry) { document.getElementById('auto-retry').checked = true; document.getElementById('retry-count-wrap').classList.remove('hidden'); }
       if (r.maxRetries) document.getElementById('max-retries').value = r.maxRetries;
     } catch (e) { console.error(e); }
   }
@@ -146,8 +91,7 @@ class PopupController {
   setDefaultScheduleTime() {
     const n = new Date(); n.setMinutes(n.getMinutes() + 10);
     const p = v => String(v).padStart(2, '0');
-    document.getElementById('schedule-time').value =
-      `${n.getFullYear()}-${p(n.getMonth()+1)}-${p(n.getDate())}T${p(n.getHours())}:${p(n.getMinutes())}`;
+    document.getElementById('schedule-time').value = `${n.getFullYear()}-${p(n.getMonth()+1)}-${p(n.getDate())}T${p(n.getHours())}:${p(n.getMinutes())}`;
   }
 
   async saveSettings() {
@@ -176,7 +120,6 @@ class PopupController {
   }
 
   // ==================== 平台选择 ====================
-
   selectPlatform(p) {
     this.selectedPlatform = p;
     document.querySelectorAll('.platform-btn').forEach(b => b.classList.remove('active'));
@@ -186,7 +129,6 @@ class PopupController {
   }
 
   // ==================== 视频目录 ====================
-
   async loadVideos(path) {
     if (!path?.trim()) { this.updateStatus('请输入目录路径'); return; }
     path = path.trim();
@@ -197,7 +139,6 @@ class PopupController {
       if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error || r.status); }
       const d = await r.json();
       if (d.videos?.length > 0) {
-        // 自动按数字前缀排序
         const sorted = this.sortVideosByNumber(d.videos);
         this.videos = sorted;
         this.selectedVideos = [...sorted];
@@ -214,39 +155,14 @@ class PopupController {
     }
   }
 
-  /**
-   * 按数字前缀排序视频：
-   * 如果文件名开头是数字（如 "01.mp4", "12-xxx.mp4"），按数字大小排序
-   * 否则保持原有顺序
-   */
   sortVideosByNumber(videos) {
     if (!videos || videos.length === 0) return videos;
-
-    // 检查是否所有文件名都有数字前缀
-    const hasNumberPrefix = v => /^\d+/.test(v.name);
-
-    const allHaveNumbers = videos.every(hasNumberPrefix);
-    if (allHaveNumbers) {
-      return [...videos].sort((a, b) => {
-        const numA = parseInt(a.name.match(/^(\d+)/)[1], 10);
-        const numB = parseInt(b.name.match(/^(\d+)/)[1], 10);
-        return numA - numB;
-      });
-    }
-
-    // 部分有数字前缀：有数字的排前面，按数字排序
-    const withNum = [];
-    const withoutNum = [];
-    videos.forEach(v => {
-      if (hasNumberPrefix(v)) withNum.push(v);
-      else withoutNum.push(v);
-    });
-    withNum.sort((a, b) => {
-      const numA = parseInt(a.name.match(/^(\d+)/)[1], 10);
-      const numB = parseInt(b.name.match(/^(\d+)/)[1], 10);
-      return numA - numB;
-    });
-
+    const hasNum = v => /^\d+/.test(v.name);
+    const allHave = videos.every(hasNum);
+    if (allHave) return [...videos].sort((a, b) => parseInt(a.name.match(/^(\d+)/)[1]) - parseInt(b.name.match(/^(\d+)/)[1]));
+    const withNum = [], withoutNum = [];
+    videos.forEach(v => (hasNum(v) ? withNum : withoutNum).push(v));
+    withNum.sort((a, b) => parseInt(a.name.match(/^(\d+)/)[1]) - parseInt(b.name.match(/^(\d+)/)[1]));
     return [...withNum, ...withoutNum];
   }
 
@@ -299,10 +215,7 @@ class PopupController {
 
   syncSelected() {
     const checked = document.querySelectorAll('#video-list input:checked');
-    this.selectedVideos = Array.from(checked).map(cb => {
-      const i = parseInt(cb.id.replace('v-', ''));
-      return this.videos[i];
-    }).filter(Boolean);
+    this.selectedVideos = Array.from(checked).map(cb => this.videos[parseInt(cb.id.replace('v-', ''))]).filter(Boolean);
     this.renderQueue();
   }
 
@@ -316,56 +229,60 @@ class PopupController {
     }
     c.innerHTML = this.selectedVideos.map((v, i) => {
       const status = this.videoStatuses[i] || 'pending';
-      return `<div class="queue-item" data-index="${i}">
+      const isSkipped = status === 'skipped';
+      const showSkipConfirm = this.isPublishing && this.skipConfirmIndex === i;
+      return `<div class="queue-item${isSkipped ? ' skipped' : ''}" data-index="${i}">
         <span class="dot ${status}"></span>
         <span class="queue-name">${i+1}. ${v.name}</span>
-        <span class="queue-status">${this._statusLabel(status)}</span>
+        ${isSkipped ? '<span class="queue-status">已跳过</span>' : ''}
+        ${showSkipConfirm ? `<span class="skip-inline">
+          <button class="skip-yes" data-skip="${i}">跳过</button>
+          <button class="skip-no" data-cancel="${i}">取消</button>
+        </span>` : ''}
       </div>`;
     }).join('');
 
-    // 发布模式下，点击排队中的视频可以跳过
+    // 绑定行内确认按钮
+    c.querySelectorAll('.skip-yes').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const idx = parseInt(btn.dataset.skip);
+        this.confirmSkip(idx);
+      });
+    });
+    c.querySelectorAll('.skip-no').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.skipConfirmIndex = -1;
+        this.renderQueue();
+      });
+    });
+
+    // 发布模式下，点击排队中的视频弹出确认
     if (this.isPublishing) {
       c.querySelectorAll('.queue-item').forEach(item => {
         const idx = parseInt(item.dataset.index);
         if (this.videoStatuses[idx] === 'pending') {
           item.style.cursor = 'pointer';
-          item.addEventListener('click', () => this.promptSkip(idx));
+          item.addEventListener('click', () => this.showSkipConfirm(idx));
         }
       });
     }
   }
 
-  _statusLabel(status) {
-    const labels = { pending: '等待中', publishing: '发布中', done: '已发布', error: '失败', skipped: '已跳过' };
-    return labels[status] || '';
+  showSkipConfirm(index) {
+    if (this.videoStatuses[index] !== 'pending') return;
+    // 切换确认状态：点击同一个再次点击则取消
+    this.skipConfirmIndex = this.skipConfirmIndex === index ? -1 : index;
+    this.renderQueue();
   }
 
-  promptSkip(index) {
-    if (this.videoStatuses[index] !== 'pending') return;
-
-    // 移除旧的 skip-hint
-    const old = document.querySelector('.skip-hint');
-    if (old) old.remove();
-
-    const v = this.selectedVideos[index];
-    const hint = document.createElement('div');
-    hint.className = 'skip-hint';
-    hint.innerHTML = `
-      <div class="skip-hint-text">跳过「${v.name}」后将不再发布此视频</div>
-      <div class="skip-hint-actions">
-        <button class="skip-cancel">取消</button>
-        <button class="skip-confirm">跳过</button>
-      </div>`;
-    document.body.appendChild(hint);
-
-    hint.querySelector('.skip-cancel').onclick = () => hint.remove();
-    hint.querySelector('.skip-confirm').onclick = () => {
-      this.videoStatuses[index] = 'skipped';
-      this.renderQueue();
-      hint.remove();
-      // 通知 background 跳过这个视频
-      chrome.runtime.sendMessage({ action: 'skipVideo', index });
-    };
+  confirmSkip(index) {
+    this.videoStatuses[index] = 'skipped';
+    this.skipConfirmIndex = -1;
+    this.renderQueue();
+    // 通知 background 并持久化
+    chrome.runtime.sendMessage({ action: 'skipVideo', index });
   }
 
   fmtSize(b) {
@@ -377,7 +294,6 @@ class PopupController {
   }
 
   // ==================== 发布按钮 ====================
-
   togglePublish() {
     if (this.isPublishing) this.stopPublish();
     else this.startPublish();
@@ -386,29 +302,20 @@ class PopupController {
   setPublishButtonState(running) {
     const btn = document.getElementById('publish-btn');
     const container = document.getElementById('app-container');
+    const anim = document.getElementById('publish-animation');
     this.isPublishing = running;
     if (running) {
-      btn.textContent = '停止';
-      btn.classList.add('running');
+      btn.textContent = '停止'; btn.classList.add('running');
       container.classList.add('publishing-mode');
+      anim.classList.remove('hidden');
     } else {
-      btn.textContent = '发布';
-      btn.classList.remove('running');
+      btn.textContent = '发布'; btn.classList.remove('running');
       container.classList.remove('publishing-mode');
+      anim.classList.add('hidden');
     }
   }
 
   // ==================== 进度条 ====================
-
-  showProgress(steps, current) {
-    const section = document.getElementById('progress-section');
-    section.classList.remove('hidden');
-    const pct = steps.length > 0 ? Math.round(((current + 1) / steps.length) * 100) : 0;
-    document.getElementById('progress-fill').style.width = pct + '%';
-    document.getElementById('progress-step').textContent = steps[current] || '准备中...';
-    document.getElementById('progress-detail').textContent = `${current + 1} / ${steps.length}`;
-  }
-
   hideProgress() {
     document.getElementById('progress-section').classList.add('hidden');
     document.getElementById('progress-fill').style.width = '0%';
@@ -441,12 +348,12 @@ class PopupController {
         this.hideProgress();
         this.updateStatus('全部完成');
         this.videoStatuses = [];
+        this.skipConfirmIndex = -1;
       }, 1500);
     }
   }
 
   // ==================== 发布流程 ====================
-
   async startPublish() {
     if (!this.selectedPlatform) { this.updateStatus('请选择平台'); return; }
     if (!this.selectedVideos.length) { this.updateStatus('请选择视频'); return; }
@@ -460,9 +367,8 @@ class PopupController {
 
     await this.saveSettings();
     this.setPublishButtonState(true);
-
-    // 初始化所有视频状态
     this.videoStatuses = this.selectedVideos.map(() => 'pending');
+    this.skipConfirmIndex = -1;
     this.renderQueue();
 
     const settings = {
@@ -476,13 +382,6 @@ class PopupController {
       autoRetry: document.getElementById('auto-retry').checked,
       maxRetries: parseInt(document.getElementById('max-retries').value) || 1
     };
-
-    // 显示进度
-    const steps = [];
-    for (let i = 0; i < this.selectedVideos.length; i++) {
-      steps.push(`[${i+1}/${this.selectedVideos.length}] ${this.selectedVideos[i].name}`);
-    }
-    this.showProgress(steps, 0);
 
     try {
       const r = await chrome.runtime.sendMessage({
@@ -504,10 +403,7 @@ class PopupController {
     this.setPublishButtonState(false);
     this.hideProgress();
     this.updateStatus('已停止');
-    // 标记未完成的视频为停止
-    this.videoStatuses = this.videoStatuses.map(s =>
-      s === 'pending' || s === 'publishing' ? 'pending' : s
-    );
+    this.skipConfirmIndex = -1;
     this.renderQueue();
   }
 
@@ -521,25 +417,19 @@ class PopupController {
     }, 2000);
   }
 
-  updateStatus(t) {
-    document.getElementById('status-text').textContent = t;
-  }
+  updateStatus(t) { document.getElementById('status-text').textContent = t; }
 
   // ==================== AI 测试 ====================
-
   async testAI() {
     const provider = document.getElementById('ai-provider').value;
     const apiKey = document.getElementById('ai-key').value.trim();
     const model = document.getElementById('ai-model').value.trim();
     const resultEl = document.getElementById('test-result');
     const btn = document.getElementById('test-ai-btn');
-
     if (!provider) { resultEl.className = 'test-result fail'; resultEl.textContent = '请先选择 Provider'; resultEl.classList.remove('hidden'); return; }
     if (!apiKey) { resultEl.className = 'test-result fail'; resultEl.textContent = '请先填写 API Key'; resultEl.classList.remove('hidden'); return; }
-
     btn.disabled = true; btn.textContent = '测试中...';
     resultEl.className = 'test-result'; resultEl.textContent = ''; resultEl.classList.remove('hidden');
-
     try {
       const r = await chrome.runtime.sendMessage({ action: 'testAI', provider, apiKey, model });
       if (r?.success) { resultEl.className = 'test-result ok'; resultEl.textContent = `连接成功! 回复: ${r.reply?.substring(0, 100) || '(空)'}`; }
@@ -549,25 +439,17 @@ class PopupController {
   }
 
   // ==================== 目录浏览器 ====================
-
   showDirBrowser() {
     if (document.getElementById('dir-mask')) return;
     const cur = document.getElementById('video-path').value.trim() || '';
     const mask = document.createElement('div');
-    mask.id = 'dir-mask';
-    mask.className = 'dir-modal-mask';
-    mask.innerHTML = `
-      <div class="dir-modal">
-        <div class="dir-modal-head">
-          <span>选择目录</span>
-          <button id="dir-close">✕</button>
-        </div>
-        <div class="dir-modal-path" id="dir-path"></div>
-        <div class="dir-modal-list" id="dir-list"></div>
-        <div class="dir-modal-foot">
-          <button id="dir-ok">选择此目录</button>
-        </div>
-      </div>`;
+    mask.id = 'dir-mask'; mask.className = 'dir-modal-mask';
+    mask.innerHTML = `<div class="dir-modal">
+      <div class="dir-modal-head"><span>选择目录</span><button id="dir-close">✕</button></div>
+      <div class="dir-modal-path" id="dir-path"></div>
+      <div class="dir-modal-list" id="dir-list"></div>
+      <div class="dir-modal-foot"><button id="dir-ok">选择此目录</button></div>
+    </div>`;
     document.body.appendChild(mask);
     mask.querySelector('#dir-close').onclick = () => mask.remove();
     mask.onclick = (e) => { if (e.target === mask) mask.remove(); };
@@ -582,8 +464,7 @@ class PopupController {
   async loadDir(mask, dir) {
     const list = mask.querySelector('#dir-list');
     const pathEl = mask.querySelector('#dir-path');
-    pathEl.textContent = dir;
-    mask.dataset.path = dir;
+    pathEl.textContent = dir; mask.dataset.path = dir;
     list.innerHTML = '<div style="padding:16px;text-align:center;color:var(--text-3)">加载中...</div>';
     try {
       const r = await fetch(`http://localhost:3000/api/directories?path=${encodeURIComponent(dir)}`);

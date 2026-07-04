@@ -19,6 +19,21 @@ let publishState = {
   skippedIndices: new Set()
 };
 
+// 启动时从 storage 恢复 skippedIndices（Service Worker 重启不丢状态）
+(async () => {
+  try {
+    const data = await chrome.storage.session.get('skippedIndices');
+    if (data.skippedIndices && Array.isArray(data.skippedIndices)) {
+      publishState.skippedIndices = new Set(data.skippedIndices);
+      console.log('[Background] 恢复跳过索引:', [...publishState.skippedIndices]);
+    }
+  } catch (_) {}
+})();
+
+function persistSkipped() {
+  chrome.storage.session.set({ skippedIndices: [...publishState.skippedIndices] }).catch(() => {});
+}
+
 let debuggerTargets = new Map();
 
 async function attachDebugger(tabId) {
@@ -162,7 +177,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     case 'skipVideo':
       publishState.skippedIndices.add(message.index);
-      console.log('[Background] 用户跳过视频索引:', message.index);
+      persistSkipped();
+      console.log('[Background] 用户跳过视频索引:', message.index, '所有跳过:', [...publishState.skippedIndices]);
       sendResponse({ success: true });
       break;
 
@@ -257,6 +273,9 @@ async function handleStartPublishFlow(message) {
     nextVideoTimer: null,
     skippedIndices: new Set()
   };
+
+  // 清除上一轮的跳过记录
+  persistSkipped();
 
   console.log('[Background] 开始发布流程，共', message.videos.length, '个视频');
   console.log('[Background] 定时发布:', message.settings.scheduledPublish ? '开启' : '关闭');
