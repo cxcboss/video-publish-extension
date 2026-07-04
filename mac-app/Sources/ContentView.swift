@@ -23,7 +23,7 @@ struct ContentView: View {
                 Image(systemName: "play.circle.fill").foregroundColor(.blue).font(.title3)
                 Text("视频发布助手").font(.headline)
                 Spacer()
-                Text("v\(extVersion.isEmpty ? "2.5.2" : extVersion)")
+                Text("v\(extVersion.isEmpty ? "2.5.3" : extVersion)")
                     .font(.caption).foregroundStyle(.secondary)
             }
 

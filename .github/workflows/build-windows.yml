@@ -3,12 +3,12 @@ name: Build Windows App
 on:
   push:
     branches: [main]
-    paths: ['win_app/**']
+    paths: ['win_app/**', '.github/workflows/build-windows.yml']
   workflow_dispatch:
 
 jobs:
   build-windows:
-    runs-on: windows-latest
+    runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
 
@@ -16,6 +16,9 @@ jobs:
         with:
           flutter-version: '3.27.0'
           channel: stable
+
+      - name: Disable Flutter analytics
+        run: flutter config --no-analytics
 
       - name: Install dependencies
         working-directory: win_app
