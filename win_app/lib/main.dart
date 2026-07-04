@@ -37,10 +37,13 @@ class _HomePageState extends State<HomePage> {
   bool envInstalled = false;
   bool extInstalled = false;
   String extVersion = '';
-  String extDest = '';
+  String workDir = ''; // %APPDATA%/AI视频发布助手
+  String serverDir = '';
+  String extDest = ''; // 工作目录中的插件副本
   String toast = '';
   bool checkingUpdate = false;
   Map<String, dynamic>? updateInfo;
+  bool _initialized = false;
 
   @override
   void initState() {
@@ -48,22 +51,52 @@ class _HomePageState extends State<HomePage> {
     _init();
   }
 
+  /// 查找源项目中的 local-server 和 chrome-extension 目录
+  /// 用于首次安装时复制到工作目录
+  String? _findSourceProject() {
+    // 从 exe 路径向上查找包含 local-server/server.js 的项目根
+    var dir = File(Platform.executable).parent.path;
+    for (var i = 0; i < 8; i++) {
+      if (File(p.join(dir, 'local-server', 'server.js')).existsSync()) {
+        return dir;
+      }
+      final parent = p.dirname(dir);
+      if (parent == dir) break;
+      dir = parent;
+    }
+    return null;
+  }
+
   Future<void> _init() async {
     final appDir = await getApplicationSupportDirectory();
-    extDest = p.join(appDir.path, 'AI视频发布助手', 'chrome-extension');
+    workDir = p.join(appDir.path, 'AI视频发布助手');
+    serverDir = p.join(workDir, 'local-server');
+    extDest = p.join(workDir, 'chrome-extension');
+
+    // 确保工作目录存在
+    await Directory(workDir).create(recursive: true);
+
+    // 如果工作目录中没有 local-server，从源项目复制
+    if (!File(p.join(serverDir, 'server.js')).existsSync()) {
+      final src = _findSourceProject();
+      if (src != null) {
+        await _copyDirectory(Directory(p.join(src, 'local-server')), Directory(serverDir));
+      }
+    }
+
+    // 如果工作目录中没有 chrome-extension，从源项目复制
+    if (!File(p.join(extDest, 'manifest.json')).existsSync()) {
+      final src = _findSourceProject();
+      if (src != null) {
+        await _copyDirectory(Directory(p.join(src, 'chrome-extension')), Directory(extDest));
+      }
+    }
+
+    _initialized = true;
     _refreshEnv();
     _checkStatus();
     _autoCheckUpdate();
   }
-
-  String get projectRoot {
-    // Flutter release exe 路径: win_app/build/windows/x64/runner/Release/video_publisher_app.exe
-    // 5 层 dirname 到项目根: Release → runner → x64 → build → win_app → 项目根
-    return p.dirname(p.dirname(p.dirname(p.dirname(p.dirname(Platform.executable)))));
-  }
-
-  String get serverDir => p.join(projectRoot, 'local-server');
-  String get extSource => p.join(projectRoot, 'chrome-extension');
 
   void _refreshEnv() {
     envInstalled = Directory(p.join(serverDir, 'node_modules')).existsSync();
@@ -74,7 +107,7 @@ class _HomePageState extends State<HomePage> {
         extVersion = j['version'] ?? '';
       } catch (_) {}
     }
-    setState(() {});
+    if (mounted) setState(() {});
   }
 
   Future<void> _checkStatus() async {
@@ -82,34 +115,41 @@ class _HomePageState extends State<HomePage> {
       final r = await http.get(Uri.parse('http://127.0.0.1:3000/health'))
           .timeout(const Duration(seconds: 2));
       if (r.statusCode == 200) {
-        setState(() { serverRunning = true; serverStatus = '服务运行中 (端口 3000)'; serverError = ''; });
+        if (mounted) setState(() { serverRunning = true; serverStatus = '服务运行中 (端口 3000)'; serverError = ''; });
       } else {
-        setState(() { serverRunning = false; serverStatus = '服务未运行'; });
+        if (mounted) setState(() { serverRunning = false; serverStatus = '服务未运行'; });
       }
     } catch (_) {
-      setState(() { serverRunning = false; serverStatus = '服务未运行'; });
+      if (mounted) setState(() { serverRunning = false; serverStatus = '服务未运行'; });
     }
   }
 
   String _findNode() {
+    // 先尝试 PATH 中的 node
+    try {
+      final result = Process.runSync('where', ['node']);
+      if (result.exitCode == 0) {
+        final path = result.stdout.toString().trim().split('\n').first.trim();
+        if (File(path).existsSync()) return path;
+      }
+    } catch (_) {}
+
+    // 常见安装位置
     final paths = [
       r'C:\Program Files\nodejs\node.exe',
       r'C:\Program Files (x86)\nodejs\node.exe',
     ];
-    // 也检查 nvm-windows 和常见安装位置
     final appData = Platform.environment['APPDATA'] ?? '';
     final userProfile = Platform.environment['USERPROFILE'] ?? '';
     if (appData.isNotEmpty) paths.add(p.join(appData, 'nvm', 'current', 'node.exe'));
     if (userProfile.isNotEmpty) paths.add(p.join(userProfile, '.nvm', 'current', 'node.exe'));
+    if (userProfile.isNotEmpty) {
+      paths.add(p.join(userProfile, 'scoop', 'apps', 'nodejs', 'current', 'bin', 'node.exe'));
+      paths.add(p.join(userProfile, 'AppData', 'Local', 'fnm', 'node-versions', 'installation', 'node.exe'));
+    }
     for (final path in paths) {
       if (File(path).existsSync()) return path;
     }
-    try {
-      final result = Process.runSync('where', ['node']);
-      if (result.exitCode == 0) {
-        return result.stdout.toString().trim().split('\n').first;
-      }
-    } catch (_) {}
     return '';
   }
 
@@ -117,31 +157,33 @@ class _HomePageState extends State<HomePage> {
     if (serverRunning || serverStarting) return;
     final nodePath = _findNode();
     if (nodePath.isEmpty) {
-      setState(() { serverError = '未找到 Node.js'; });
+      if (mounted) setState(() { serverError = '未找到 Node.js，请先安装 Node.js'; });
       return;
     }
     final serverJS = p.join(serverDir, 'server.js');
     if (!File(serverJS).existsSync()) {
-      setState(() { serverError = 'server.js 不存在'; });
+      if (mounted) setState(() { serverError = 'server.js 不存在，请先安装插件'; });
       return;
     }
-    setState(() { serverStarting = true; serverError = ''; });
+    if (!Directory(p.join(serverDir, 'node_modules')).existsSync()) {
+      if (mounted) setState(() { serverError = '依赖未安装，请先点击"安装环境"'; });
+      return;
+    }
+    if (mounted) setState(() { serverStarting = true; serverError = ''; });
     try {
       await Process.start(nodePath, ['server.js'], workingDirectory: serverDir);
-      // 轮询等待服务启动
       for (var i = 0; i < 15; i++) {
         await Future.delayed(const Duration(seconds: 1));
         await _checkStatus();
         if (serverRunning) break;
       }
     } catch (e) {
-      setState(() { serverError = '启动失败: $e'; });
+      if (mounted) setState(() { serverError = '启动失败: $e'; });
     }
-    setState(() { serverStarting = false; });
+    if (mounted) setState(() { serverStarting = false; });
   }
 
   void _stopServer() {
-    // 查找占用3000端口的进程并杀死
     try {
       final result = Process.runSync('netstat', ['-ano']);
       final lines = result.stdout.toString().split('\n');
@@ -157,38 +199,73 @@ class _HomePageState extends State<HomePage> {
         }
       }
     } catch (_) {}
-    setState(() { serverRunning = false; serverStatus = '服务已停止'; });
+    if (mounted) setState(() { serverRunning = false; serverStatus = '服务已停止'; });
   }
 
   Future<void> _installDeps() async {
+    final nodePath = _findNode();
+    if (nodePath.isEmpty) { _showToast('未找到 Node.js'); return; }
+
+    // 确保 serverDir 存在且有 server.js
+    if (!File(p.join(serverDir, 'server.js')).existsSync()) {
+      final src = _findSourceProject();
+      if (src != null) {
+        await _copyDirectory(Directory(p.join(src, 'local-server')), Directory(serverDir));
+      } else {
+        _showToast('未找到源项目，无法安装依赖');
+        return;
+      }
+    }
+
+    // npm 和 node 在同一目录
+    final nodeDir = p.dirname(nodePath);
+    final npmPath = p.join(nodeDir, 'npm.cmd');
+    if (!File(npmPath).existsSync()) {
+      // 回退到 npm（无扩展名）
+      final npmNoExt = p.join(nodeDir, 'npm');
+      if (!File(npmNoExt).existsSync()) {
+        _showToast('未找到 npm');
+        return;
+      }
+    }
+
+    final npmCmd = File(npmPath).existsSync() ? npmPath : p.join(nodeDir, 'npm');
+    _showToast('正在安装依赖...');
     try {
-      final nodePath = _findNode();
-      if (nodePath.isEmpty) { _showToast('✗ 未找到 Node.js'); return; }
-      final npmPath = p.join(p.dirname(nodePath), 'npm.cmd');
-      final result = await Process.run(npmPath, ['install'], workingDirectory: serverDir);
+      final result = await Process.run(npmCmd, ['install'], workingDirectory: serverDir);
       if (result.exitCode == 0) {
-        _showToast('✓ 服务依赖安装完成');
+        _showToast('服务依赖安装完成');
         _refreshEnv();
       } else {
-        _showToast('✗ 安装失败: ${result.stderr}');
+        final stderr = result.stderr.toString();
+        final stdout = result.stdout.toString();
+        _showToast('安装失败: ${stderr.isNotEmpty ? stderr : stdout}');
       }
     } catch (e) {
-      _showToast('✗ 安装失败: $e');
+      _showToast('安装失败: $e');
     }
   }
 
   Future<void> _installExtension() async {
     try {
-      final src = Directory(extSource);
-      if (!src.existsSync()) { _showToast('源插件目录不存在'); return; }
+      // 优先从源项目复制
+      final srcProject = _findSourceProject();
+      final srcPath = srcProject != null
+          ? p.join(srcProject, 'chrome-extension')
+          : null;
+
+      if (srcPath == null || !Directory(srcPath).existsSync()) {
+        _showToast('未找到源插件目录');
+        return;
+      }
+
       final dst = Directory(extDest);
       if (dst.existsSync()) dst.deleteSync(recursive: true);
-      // 递归复制
-      await _copyDirectory(src, dst);
-      _showToast('✓ 插件已安装');
+      await _copyDirectory(Directory(srcPath), dst);
+      _showToast('插件已安装');
       _refreshEnv();
     } catch (e) {
-      _showToast('✗ 安装失败: $e');
+      _showToast('安装失败: $e');
     }
   }
 
@@ -196,7 +273,7 @@ class _HomePageState extends State<HomePage> {
     await dst.create(recursive: true);
     await for (final entity in src.list()) {
       final name = p.basename(entity.path);
-      if (name == 'node_modules' || name == '.DS_Store') continue;
+      if (name == 'node_modules' || name == '.DS_Store' || name == '.git') continue;
       final dstPath = p.join(dst.path, name);
       if (entity is File) {
         await entity.copy(dstPath);
@@ -207,14 +284,12 @@ class _HomePageState extends State<HomePage> {
   }
 
   void _openExtDir() {
-    if (Directory(extDest).existsSync()) {
-      Process.run('explorer', [extDest]);
-    } else {
-      Process.run('explorer', [p.dirname(extDest)]);
-    }
+    final dir = Directory(extDest).existsSync() ? extDest : p.dirname(extDest);
+    Process.run('explorer', [dir]);
   }
 
   Future<void> _autoCheckUpdate() async {
+    if (!_initialized) return;
     _refreshEnv();
     try {
       final r = await http.get(Uri.parse('https://api.github.com/repos/cxcboss/video-publish-extension/releases/latest'))
@@ -222,88 +297,150 @@ class _HomePageState extends State<HomePage> {
       if (r.statusCode == 200) {
         final j = jsonDecode(r.body);
         final latest = (j['tag_name'] ?? '').toString().replaceFirst('v', '');
-        final cur = extVersion.split('.').map(int.tryParse).toList();
-        final lat = latest.split('.').map(int.tryParse).toList();
+        if (latest.isEmpty) return;
+
+        final cur = _parseVersion(extVersion);
+        final lat = _parseVersion(latest);
         bool hasUpdate = false;
         for (var i = 0; i < 3; i++) {
-          final c = i < cur.length ? (cur[i] ?? 0) : 0;
-          final l = i < lat.length ? (lat[i] ?? 0) : 0;
-          if (l > c) { hasUpdate = true; break; }
-          if (l < c) break;
+          if (lat[i] > cur[i]) { hasUpdate = true; break; }
+          if (lat[i] < cur[i]) break;
         }
+
         if (hasUpdate) {
-          setState(() {
-            updateInfo = {
-              'installed': extVersion,
-              'latest': latest,
-              'changelog': j['body'] ?? '',
-              'zipUrl': (j['assets'] as List?)?.isNotEmpty == true
-                  ? j['assets'][0]['browser_download_url'] : '',
-            };
-          });
+          // 找到 chrome-extension.zip 资产（非 DMG）
+          String zipUrl = '';
+          final assets = j['assets'] as List? ?? [];
+          for (final asset in assets) {
+            final name = (asset['name'] ?? '').toString();
+            if (name.endsWith('.zip') && name.contains('chrome')) {
+              zipUrl = asset['browser_download_url'] ?? '';
+              break;
+            }
+          }
+          // 回退：取第一个 zip 资产
+          if (zipUrl.isEmpty) {
+            for (final asset in assets) {
+              final name = (asset['name'] ?? '').toString();
+              if (name.endsWith('.zip')) {
+                zipUrl = asset['browser_download_url'] ?? '';
+                break;
+              }
+            }
+          }
+
+          if (mounted) {
+            setState(() {
+              updateInfo = {
+                'installed': extVersion,
+                'latest': latest,
+                'changelog': j['body'] ?? '',
+                'zipUrl': zipUrl,
+              };
+            });
+          }
         }
       }
     } catch (_) {}
   }
 
+  List<int> _parseVersion(String v) {
+    return v.split('.').map((s) => int.tryParse(s) ?? 0).toList();
+  }
+
   Future<void> _checkUpdate() async {
-    setState(() { checkingUpdate = true; });
+    if (mounted) setState(() { checkingUpdate = true; });
     _refreshEnv();
+    updateInfo = null;
     await _autoCheckUpdate();
-    if (updateInfo == null) _showToast('已是最新版本');
-    setState(() { checkingUpdate = false; });
+    if (updateInfo == null && mounted) _showToast('已是最新版本');
+    if (mounted) setState(() { checkingUpdate = false; });
   }
 
   Future<void> _doUpdate() async {
     final url = updateInfo?['zipUrl'];
-    if (url == null || url.isEmpty) return;
-    setState(() { updateInfo = {...?updateInfo, 'updating': true}; });
+    if (url == null || url.isEmpty) {
+      _showToast('未找到下载链接');
+      return;
+    }
+    if (mounted) setState(() { updateInfo = {...?updateInfo, 'updating': true}; });
+
+    final tmpZip = p.join(Directory.systemTemp.path, 'vpe-update.zip');
+    final tmpExtract = p.join(Directory.systemTemp.path, 'vpe-extract');
+
     try {
-      final tmpZip = p.join(Directory.systemTemp.path, 'vpe-update.zip');
-      final tmpExtract = p.join(Directory.systemTemp.path, 'vpe-extract');
-      final r = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 60));
-      File(tmpZip).writeAsBytesSync(r.bodyBytes);
+      // 下载
+      _showToast('正在下载更新...');
+      final r = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 120));
+      if (r.statusCode != 200) throw Exception('下载失败 (${r.statusCode})');
+      await File(tmpZip).writeAsBytes(r.bodyBytes);
 
-      // 解压 ZIP（Windows 用 PowerShell）
-      await Process.run('powershell', [
-        '-Command',
-        'Expand-Archive', '-Path', tmpZip, '-DestinationPath', tmpExtract, '-Force'
+      // 清理旧解压目录
+      if (Directory(tmpExtract).existsSync()) {
+        Directory(tmpExtract).deleteSync(recursive: true);
+      }
+
+      // 解压
+      _showToast('正在解压...');
+      final unzipResult = await Process.run('powershell', [
+        '-NoProfile', '-Command',
+        'Expand-Archive', '-Path', tmpZip, '-DestinationPath', tmpExtract, '-Force',
       ]);
+      if (unzipResult.exitCode != 0) {
+        throw Exception('解压失败: ${unzipResult.stderr}');
+      }
 
-      // 找 manifest.json
-      final extractDir = Directory(tmpExtract);
+      // 找 manifest.json（可能在子目录中）
       String? srcDir;
       if (File(p.join(tmpExtract, 'manifest.json')).existsSync()) {
         srcDir = tmpExtract;
       } else {
-        for (final entity in extractDir.listSync()) {
-          if (entity is Directory && File(p.join(entity.path, 'manifest.json')).existsSync()) {
-            srcDir = entity.path;
-            break;
+        final entities = Directory(tmpExtract).listSync();
+        for (final entity in entities) {
+          if (entity is Directory) {
+            if (File(p.join(entity.path, 'manifest.json')).existsSync()) {
+              srcDir = entity.path;
+              break;
+            }
+            // GitHub zipball 可能多一层目录
+            for (final sub in Directory(entity.path).listSync()) {
+              if (sub is Directory && File(p.join(sub.path, 'manifest.json')).existsSync()) {
+                srcDir = sub.path;
+                break;
+              }
+            }
+            if (srcDir != null) break;
           }
         }
       }
+
       if (srcDir == null) throw Exception('ZIP 中未找到插件文件');
 
+      // 验证新版本号
+      final newManifest = jsonDecode(File(p.join(srcDir, 'manifest.json')).readAsStringSync());
+      final newVersion = newManifest['version'] ?? '';
+
       // 覆盖目标目录
+      _showToast('正在安装 v$newVersion ...');
       final dst = Directory(extDest);
       if (dst.existsSync()) dst.deleteSync(recursive: true);
       await _copyDirectory(Directory(srcDir), dst);
 
-      // 清理
-      try { File(tmpZip).deleteSync(recursive: true); } catch (_) {}
-      try { Directory(tmpExtract).deleteSync(recursive: true); } catch (_) {}
-
       _refreshEnv();
-      setState(() { updateInfo = null; });
-      _showToast('✓ 更新完成');
+      if (mounted) setState(() { updateInfo = null; });
+      _showToast('更新完成 (v$newVersion)');
     } catch (e) {
-      _showToast('✗ 更新失败: $e');
+      _showToast('更新失败: $e');
+    } finally {
+      // 清理临时文件
+      try { File(tmpZip).deleteSync(); } catch (_) {}
+      try { Directory(tmpExtract).deleteSync(recursive: true); } catch (_) {}
+      if (mounted) setState(() { updateInfo = {...?updateInfo, 'updating': false}; });
     }
-    setState(() { updateInfo = {...?updateInfo, 'updating': false}; });
   }
 
   void _showToast(String msg) {
+    if (!mounted) return;
     setState(() { toast = msg; });
     Future.delayed(const Duration(seconds: 2), () {
       if (mounted) setState(() { toast = ''; });
@@ -325,7 +462,7 @@ class _HomePageState extends State<HomePage> {
                   const SizedBox(width: 8),
                   const Text('视频发布助手', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
                   const Spacer(),
-                  Text('v${extVersion.isEmpty ? "2.5.2" : extVersion}',
+                  Text('v${extVersion.isEmpty ? "2.5.3" : extVersion}',
                       style: const TextStyle(fontSize: 12, color: Colors.grey)),
                 ]),
                 const SizedBox(height: 16),
