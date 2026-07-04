@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI 视频发布助手</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+
+    <!-- 顶部状态栏 + 发布按钮 -->
+    <div class="topbar">
+      <div class="topbar-left">
+        <span class="status-dot" id="status-dot"></span>
+        <span class="status-text" id="status-text">检测中...</span>
+      </div>
+      <button id="publish-btn" class="publish-btn">发布</button>
+      <span class="version" id="version-text">v2.5.2</span>
+    </div>
+
+    <!-- 发布进度 -->
+    <div id="progress-section" class="section compact hidden">
+      <div class="progress-bar">
+        <div class="progress-fill" id="progress-fill"></div>
+      </div>
+      <div class="progress-step" id="progress-step">准备中...</div>
+      <div class="progress-detail" id="progress-detail"></div>
+    </div>
+
+    <!-- 平台选择 -->
+    <div class="section compact">
+      <div class="platform-row">
+        <button id="douyin-btn" class="platform-btn">
+          <span>♪</span> 抖音
+        </button>
+        <button id="weixin-btn" class="platform-btn">
+          <span>◈</span> 视频号
+        </button>
+      </div>
+    </div>
+
+    <!-- 定时发布 -->
+    <div class="section compact">
+      <div class="row-between">
+        <label class="toggle-label">
+          <input type="checkbox" id="scheduled-publish">
+          <span class="toggle-switch"></span>
+          <span>定时发布</span>
+        </label>
+        <div id="schedule-time-wrap" class="inline-input hidden">
+          <input type="datetime-local" id="schedule-time">
+        </div>
+      </div>
+      <div class="hint" id="schedule-hint">抖音：调用平台原生定时发布</div>
+    </div>
+
+    <!-- 自动重试 -->
+    <div class="section compact">
+      <div class="row-between">
+        <label class="toggle-label">
+          <input type="checkbox" id="auto-retry">
+          <span class="toggle-switch"></span>
+          <span>超时自动重试</span>
+        </label>
+        <div id="retry-count-wrap" class="inline-input hidden">
+          <label class="small-label">次数</label>
+          <input type="number" id="max-retries" min="1" max="10" value="1" class="small-input">
+        </div>
+      </div>
+      <div class="hint">单个视频任务超时30秒时自动重试</div>
+    </div>
+
+    <!-- AI 生成（含 AI 配置折叠区） -->
+    <div class="section compact">
+      <div class="row-between clickable" id="auto-generate-row">
+        <label class="toggle-label" onclick="event.stopPropagation()">
+          <input type="checkbox" id="auto-generate">
+          <span class="toggle-switch"></span>
+          <span>AI 生成文案和标签</span>
+        </label>
+        <span class="arrow" id="ai-arrow" title="AI 配置">▸</span>
+      </div>
+      <!-- AI 配置：点击箭头展开 -->
+      <div id="ai-config-wrap" class="hidden">
+        <div class="form-row" style="margin-top:8px">
+          <label>Provider</label>
+          <select id="ai-provider">
+            <option value="">-- 选择 --</option>
+            <option value="mimo">小米 MiMo (mimo-v2.5)</option>
+            <option value="openai">OpenAI GPT</option>
+            <option value="gemini">Google Gemini</option>
+            <option value="doubao">豆包 (字节)</option>
+            <option value="deepseek">DeepSeek</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label>API Key</label>
+          <input type="password" id="ai-key" placeholder="sk-...">
+        </div>
+        <div class="form-row">
+          <label>Model</label>
+          <input type="text" id="ai-model" placeholder="可选，留空用默认">
+        </div>
+        <button id="test-ai-btn" class="test-btn">测试连接</button>
+        <div id="test-result" class="test-result hidden"></div>
+      </div>
+      <!-- 视频内容描述 -->
+      <div id="video-content-wrap" class="hidden">
+        <textarea id="video-content" placeholder="描述视频内容，AI 根据此内容生成话题标签（最多5个）和描述文案"></textarea>
+      </div>
+    </div>
+
+    <!-- 视频目录 -->
+    <div class="section compact">
+      <div class="path-row">
+        <input type="text" id="video-path" placeholder="视频目录路径 /Users/xxx/Videos">
+        <button id="refresh-btn" class="path-btn refresh" title="刷新列表">↻</button>
+        <button id="browse-btn" class="path-btn">浏览</button>
+      </div>
+      <div id="video-list" class="video-list"></div>
+    </div>
+
+    <!-- 发布队列 -->
+    <div class="section compact" id="queue-section">
+      <div class="section-header">
+        <span>发布队列</span>
+        <span class="queue-count" id="queue-count">0</span>
+      </div>
+      <div id="publish-queue" class="publish-queue"></div>
+    </div>
+
+    <!-- 服务启动提示（未连接时显示） -->
+    <div id="server-hint" class="server-hint hidden">
+      <div class="server-hint-title">本地服务未启动</div>
+      <code id="server-cmd">cd local-server && node server.js</code>
+    </div>
+
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

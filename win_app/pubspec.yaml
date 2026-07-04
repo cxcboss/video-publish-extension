@@ -12,6 +12,8 @@ dependencies:
   http: ^1.2.0
   path_provider: ^2.1.0
   path: ^1.9.0
+  system_tray: ^2.0.3
+  window_manager: ^0.3.7
 
 dev_dependencies:
   flutter_test:
@@ -20,3 +22,16 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/chrome-extension/manifest.json
+    - assets/chrome-extension/background/background.js
+    - assets/chrome-extension/content/douyin.js
+    - assets/chrome-extension/content/weixin.js
+    - assets/chrome-extension/popup/popup.html
+    - assets/chrome-extension/popup/popup.js
+    - assets/chrome-extension/popup/popup.css
+    - assets/chrome-extension/icons/icon16.png
+    - assets/chrome-extension/icons/icon48.png
+    - assets/chrome-extension/icons/icon128.png
+    - assets/local-server/server.js
+    - assets/local-server/package.json
