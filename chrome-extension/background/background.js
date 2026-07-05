@@ -120,7 +120,25 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ success: true });
       break;
     case 'skipVideo':
-      addSkippedIndex(message.index).then(() => sendResponse({ success: true }));
+      (async () => {
+        await addSkippedIndex(message.index);
+        // 如果跳过的是当前正在发布的视频，需要中止当前并移到下一个
+        if (message.index === publishState.currentIndex && publishState.isPublishing) {
+          console.log('[BG] 跳过当前正在发布的视频:', message.index);
+          clearPublishTimeout();
+          if (publishState.targetTabId) {
+            detachDebugger(publishState.targetTabId);
+            chrome.tabs.remove(publishState.targetTabId).catch(() => {});
+            publishState.targetTabId = null;
+          }
+          publishState.currentIndex++;
+          publishState.debuggerAttached = false;
+          publishState.commandSent = false;
+          await sleep(2000);
+          if (publishState.isPublishing) await publishNextVideo();
+        }
+        sendResponse({ success: true });
+      })();
       return true;
     case 'ping':
       sendResponse({ ready: true, state: publishState });
@@ -190,20 +208,14 @@ async function handleStartPublishFlow(message) {
 async function publishNextVideo() {
   if (!publishState.isPublishing) return;
 
-  // ★ 核心修复：每次从 storage 读取最新跳过列表
+  // 从 storage 读取最新跳过列表（popup 直接写 storage）
   const skipped = await getSkippedIndices();
-  console.log('[BG] publishNextVideo 当前跳过:', [...skipped], 'currentIndex:', publishState.currentIndex);
+  console.log('[BG] publishNextVideo currentIndex:', publishState.currentIndex, 'skipped:', [...skipped]);
 
   while (publishState.currentIndex < publishState.videos.length && skipped.has(publishState.currentIndex)) {
-    const skippedIdx = publishState.currentIndex;
-    console.log('[BG] 跳过视频:', skippedIdx, publishState.videos[skippedIdx]?.name);
-    // 通知 popup 该视频被跳过
-    chrome.runtime.sendMessage({
-      action: 'progressUpdate',
-      videoIndex: skippedIdx,
-      status: 'skipped',
-      step: `跳过: ${publishState.videos[skippedIdx]?.name || skippedIdx}`,
-    }).catch(() => {});
+    const sIdx = publishState.currentIndex;
+    console.log('[BG] 跳过:', sIdx, publishState.videos[sIdx]?.name);
+    sendProgress(`跳过: ${publishState.videos[sIdx]?.name || sIdx}`, 'skipped', sIdx, publishState.videos.length);
     publishState.currentIndex++;
   }
 

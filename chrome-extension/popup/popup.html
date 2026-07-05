@@ -16,19 +16,16 @@
         <span class="status-text" id="status-text">检测中...</span>
       </div>
       <button id="publish-btn" class="publish-btn">发布</button>
-      <span class="version" id="version-text">v2.6.3</span>
+      <span class="version" id="version-text">v2.6.4</span>
     </div>
 
-    <!-- 发布中小动画 -->
+    <!-- 传送带动画 -->
     <div id="publish-animation" class="publish-animation hidden">
-      <div class="anim-scene">
-        <div class="anim-box" id="anim-box">📦</div>
-        <div class="anim-person" id="anim-person">
-          <span class="anim-body">🧑‍💻</span>
-        </div>
-        <div class="anim-trail"></div>
+      <div class="belt-track">
+        <div class="belt-line"></div>
+        <div id="anim-belt" class="belt-items"></div>
       </div>
-      <div class="anim-label" id="anim-label">发布中...</div>
+      <div class="anim-status" id="anim-status"></div>
     </div>
 
     <!-- 发布进度 -->
@@ -44,15 +41,11 @@
     <div class="section compact section-controls">
       <div class="platform-row">
         <div class="platform-group">
-          <button id="douyin-btn" class="platform-btn">
-            <span>♪</span> 抖音
-          </button>
+          <button id="douyin-btn" class="platform-btn"><span>♪</span> 抖音</button>
           <button class="open-link-btn" id="open-douyin" title="打开抖音创作者中心">↗</button>
         </div>
         <div class="platform-group">
-          <button id="weixin-btn" class="platform-btn">
-            <span>◈</span> 视频号
-          </button>
+          <button id="weixin-btn" class="platform-btn"><span>◈</span> 视频号</button>
           <button class="open-link-btn" id="open-weixin" title="打开视频号创作平台">↗</button>
         </div>
       </div>
@@ -81,17 +74,19 @@
           <span class="toggle-switch"></span>
           <span>超时自动重试</span>
         </label>
-        <div id="retry-count-wrap" class="inline-input">
-          <label class="small-label">次数</label>
-          <input type="number" id="max-retries" min="1" max="10" value="1" class="small-input">
-        </div>
       </div>
-      <div class="row-between" style="margin-top:6px">
-        <span class="hint" style="flex:1">单个视频超时时自动重试</span>
-        <div class="inline-input">
-          <label class="small-label">超时</label>
-          <input type="number" id="timeout-seconds" min="30" max="600" value="120" class="small-input" style="width:52px">
-          <label class="small-label">秒</label>
+      <div id="retry-options" class="hidden" style="margin-top:6px">
+        <div class="row-between">
+          <span class="hint" style="flex:1">单个视频超时时自动重试</span>
+          <div class="inline-input">
+            <label class="small-label">超时</label>
+            <input type="number" id="timeout-seconds" min="30" max="600" value="120" class="small-input" style="width:52px">
+            <label class="small-label">秒</label>
+          </div>
+          <div class="inline-input" style="margin-left:8px">
+            <label class="small-label">次数</label>
+            <input type="number" id="max-retries" min="1" max="10" value="1" class="small-input">
+          </div>
         </div>
       </div>
     </div>
@@ -118,14 +113,8 @@
             <option value="deepseek">DeepSeek</option>
           </select>
         </div>
-        <div class="form-row">
-          <label>API Key</label>
-          <input type="password" id="ai-key" placeholder="sk-...">
-        </div>
-        <div class="form-row">
-          <label>Model</label>
-          <input type="text" id="ai-model" placeholder="可选，留空用默认">
-        </div>
+        <div class="form-row"><label>API Key</label><input type="password" id="ai-key" placeholder="sk-..."></div>
+        <div class="form-row"><label>Model</label><input type="text" id="ai-model" placeholder="可选，留空用默认"></div>
         <button id="test-ai-btn" class="test-btn">测试连接</button>
         <div id="test-result" class="test-result hidden"></div>
       </div>
@@ -160,7 +149,6 @@
     </div>
 
   </div>
-
   <script src="popup.js"></script>
 </body>
 </html>
