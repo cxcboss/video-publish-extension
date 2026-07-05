@@ -83,8 +83,9 @@ class PopupController {
       if (r.scheduledPublish) { document.getElementById('scheduled-publish').checked = true; document.getElementById('schedule-time-wrap').classList.remove('hidden'); }
       if (r.scheduleTime) document.getElementById('schedule-time').value = r.scheduleTime;
       else this.setDefaultScheduleTime();
-      if (r.autoRetry) { document.getElementById('auto-retry').checked = true; document.getElementById('retry-count-wrap').classList.remove('hidden'); }
+      if (r.autoRetry !== undefined) document.getElementById('auto-retry').checked = r.autoRetry;
       if (r.maxRetries) document.getElementById('max-retries').value = r.maxRetries;
+      if (r.timeoutSeconds) document.getElementById('timeout-seconds').value = r.timeoutSeconds;
     } catch (e) { console.error(e); }
   }
 
@@ -106,7 +107,8 @@ class PopupController {
         scheduledPublish: document.getElementById('scheduled-publish').checked,
         scheduleTime: document.getElementById('schedule-time').value,
         autoRetry: document.getElementById('auto-retry').checked,
-        maxRetries: parseInt(document.getElementById('max-retries').value) || 1
+        maxRetries: parseInt(document.getElementById('max-retries').value) || 1,
+        timeoutSeconds: parseInt(document.getElementById('timeout-seconds').value) || 120
       });
     } catch (e) { console.error(e); }
   }
@@ -380,7 +382,8 @@ class PopupController {
       scheduledPublish: document.getElementById('scheduled-publish').checked,
       scheduleTime: document.getElementById('schedule-time').value,
       autoRetry: document.getElementById('auto-retry').checked,
-      maxRetries: parseInt(document.getElementById('max-retries').value) || 1
+      maxRetries: parseInt(document.getElementById('max-retries').value) || 1,
+      timeoutSeconds: parseInt(document.getElementById('timeout-seconds').value) || 120
     };
 
     try {

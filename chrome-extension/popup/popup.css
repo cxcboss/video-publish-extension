@@ -185,8 +185,8 @@ body {
 .path-btn.refresh { background: var(--bg-input); color: var(--text-2); border: 1px solid var(--border); padding: 6px 8px; font-size: 13px; min-width: 28px; }
 .path-btn.refresh:hover { border-color: var(--text-3); color: var(--text); }
 
-/* 视频列表 */
-.video-list { max-height: 286px; overflow-y: auto; margin-top: 6px; border: 1px solid var(--border); border-radius: 5px; padding: 3px; }
+/* 视频列表 - 显示约15.5个视频 */
+.video-list { max-height: 430px; overflow-y: auto; margin-top: 6px; border: 1px solid var(--border); border-radius: 5px; padding: 3px; }
 .video-list::-webkit-scrollbar { width: 2px; }
 .video-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 .video-list:empty { display: none; }
@@ -218,7 +218,7 @@ body {
 /* ========== 队列 ========== */
 .section-header { display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: var(--text-2); }
 .queue-count { background: var(--border); color: var(--text-2); padding: 1px 6px; border-radius: 8px; font-size: 10px; }
-.publish-queue { max-height: 80px; overflow-y: auto; margin-top: 4px; }
+.publish-queue { max-height: 430px; overflow-y: auto; margin-top: 4px; }
 .queue-item {
   display: flex; align-items: center;
   padding: 4px 6px; background: var(--queue-bg); border-radius: 3px;

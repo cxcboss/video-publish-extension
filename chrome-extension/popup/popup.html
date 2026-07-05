@@ -16,7 +16,7 @@
         <span class="status-text" id="status-text">检测中...</span>
       </div>
       <button id="publish-btn" class="publish-btn">发布</button>
-      <span class="version" id="version-text">v2.6.1</span>
+      <span class="version" id="version-text">v2.6.2</span>
     </div>
 
     <!-- 发布中小动画 -->
@@ -77,16 +77,23 @@
     <div class="section compact section-controls">
       <div class="row-between">
         <label class="toggle-label">
-          <input type="checkbox" id="auto-retry">
+          <input type="checkbox" id="auto-retry" checked>
           <span class="toggle-switch"></span>
           <span>超时自动重试</span>
         </label>
-        <div id="retry-count-wrap" class="inline-input hidden">
+        <div id="retry-count-wrap" class="inline-input">
           <label class="small-label">次数</label>
           <input type="number" id="max-retries" min="1" max="10" value="1" class="small-input">
         </div>
       </div>
-      <div class="hint">单个视频任务超时30秒时自动重试</div>
+      <div class="row-between" style="margin-top:6px">
+        <span class="hint" style="flex:1">单个视频超时时自动重试</span>
+        <div class="inline-input">
+          <label class="small-label">超时</label>
+          <input type="number" id="timeout-seconds" min="30" max="600" value="120" class="small-input" style="width:52px">
+          <label class="small-label">秒</label>
+        </div>
+      </div>
     </div>
 
     <!-- AI 生成 -->
