@@ -14,27 +14,32 @@ let publishState = {
   retryCounts: {},
   timeoutTimer: null,
   nextVideoTimer: null,
-  skippedIndices: new Set()
 };
 
-// 持久化跳过的索引
-function persistSkipped() {
+// ========== 跳过管理：chrome.storage.local 作为唯一真相源 ==========
+
+const SKIP_KEY = '_vpe_skipped_indices';
+
+async function getSkippedIndices() {
   try {
-    chrome.storage.local.set({ _skippedIndices: [...publishState.skippedIndices] });
+    const data = await chrome.storage.local.get(SKIP_KEY);
+    return new Set(data[SKIP_KEY] || []);
+  } catch (_) { return new Set(); }
+}
+
+async function addSkippedIndex(index) {
+  try {
+    const data = await chrome.storage.local.get(SKIP_KEY);
+    const arr = data[SKIP_KEY] || [];
+    if (!arr.includes(index)) arr.push(index);
+    await chrome.storage.local.set({ [SKIP_KEY]: arr });
+    console.log('[BG] 已跳过索引:', index, '全部:', arr);
   } catch (_) {}
 }
 
-async function restoreSkipped() {
-  try {
-    const data = await chrome.storage.local.get('_skippedIndices');
-    if (data._skippedIndices && Array.isArray(data._skippedIndices)) {
-      for (const i of data._skippedIndices) publishState.skippedIndices.add(i);
-    }
-  } catch (_) {}
+async function clearSkippedIndices() {
+  try { await chrome.storage.local.set({ [SKIP_KEY]: [] }); } catch (_) {}
 }
-
-// Service Worker 启动时恢复
-restoreSkipped();
 
 let debuggerTargets = new Map();
 
@@ -56,7 +61,6 @@ async function attachDebugger(tabId) {
     }
     debuggerTargets.set(tabId, true);
     publishState.debuggerAttached = true;
-    console.log('[BG] 调试器附加成功');
     return true;
   } catch (error) {
     console.error('[BG] 附加调试器失败:', error.message);
@@ -66,10 +70,7 @@ async function attachDebugger(tabId) {
 
 async function detachDebugger(tabId) {
   if (!debuggerTargets.has(tabId)) return;
-  try {
-    await chrome.debugger.detach({ tabId });
-    debuggerTargets.delete(tabId);
-  } catch (_) {}
+  try { await chrome.debugger.detach({ tabId }); debuggerTargets.delete(tabId); } catch (_) {}
 }
 
 chrome.debugger.onEvent.addListener(async (source, method, params) => {
@@ -96,10 +97,7 @@ chrome.debugger.onEvent.addListener(async (source, method, params) => {
   }
 });
 
-chrome.debugger.onDetach.addListener((source) => {
-  if (source.tabId) debuggerTargets.delete(source.tabId);
-});
-
+chrome.debugger.onDetach.addListener((source) => { if (source.tabId) debuggerTargets.delete(source.tabId); });
 chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -114,9 +112,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         .then(result => sendResponse(result))
         .catch(error => sendResponse({ topics: [], description: '', error: error.message }));
       return true;
-    case 'publishProgress':
-      sendResponse({ success: true });
-      break;
     case 'getPublishState':
       sendResponse(publishState);
       break;
@@ -125,11 +120,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ success: true });
       break;
     case 'skipVideo':
-      publishState.skippedIndices.add(message.index);
-      persistSkipped();
-      console.log('[BG] 跳过视频:', message.index, '所有:', [...publishState.skippedIndices]);
-      sendResponse({ success: true });
-      break;
+      addSkippedIndex(message.index).then(() => sendResponse({ success: true }));
+      return true;
     case 'ping':
       sendResponse({ ready: true, state: publishState });
       break;
@@ -173,9 +165,6 @@ async function handleStartPublishFlow(message) {
     initialScheduledTime = message.settings.scheduleTime.replace('T', ' ');
   }
 
-  // 保留之前已跳过的索引
-  const existingSkipped = new Set(publishState.skippedIndices);
-
   publishState = {
     isPublishing: true,
     videos: message.videos,
@@ -192,31 +181,28 @@ async function handleStartPublishFlow(message) {
     retryCounts: {},
     timeoutTimer: null,
     nextVideoTimer: null,
-    skippedIndices: existingSkipped
   };
 
-  // 加载 storage 中的跳过记录
-  await restoreSkipped();
-  // 合并
-  for (const i of existingSkipped) publishState.skippedIndices.add(i);
-  persistSkipped();
-
-  console.log('[BG] 开始发布，共', message.videos.length, '个，跳过:', [...publishState.skippedIndices]);
+  console.log('[BG] 开始发布，共', message.videos.length, '个视频');
   await publishNextVideo();
 }
 
 async function publishNextVideo() {
   if (!publishState.isPublishing) return;
 
-  // 跳过被标记的视频
-  while (publishState.currentIndex < publishState.videos.length &&
-         publishState.skippedIndices.has(publishState.currentIndex)) {
-    console.log('[BG] 跳过视频:', publishState.currentIndex);
+  // ★ 核心修复：每次从 storage 读取最新跳过列表
+  const skipped = await getSkippedIndices();
+  console.log('[BG] publishNextVideo 当前跳过:', [...skipped], 'currentIndex:', publishState.currentIndex);
+
+  while (publishState.currentIndex < publishState.videos.length && skipped.has(publishState.currentIndex)) {
+    const skippedIdx = publishState.currentIndex;
+    console.log('[BG] 跳过视频:', skippedIdx, publishState.videos[skippedIdx]?.name);
     // 通知 popup 该视频被跳过
     chrome.runtime.sendMessage({
       action: 'progressUpdate',
-      videoIndex: publishState.currentIndex,
-      status: 'skipped'
+      videoIndex: skippedIdx,
+      status: 'skipped',
+      step: `跳过: ${publishState.videos[skippedIdx]?.name || skippedIdx}`,
     }).catch(() => {});
     publishState.currentIndex++;
   }
@@ -239,7 +225,6 @@ async function publishNextVideo() {
   publishState.commandSent = false;
   publishState.debuggerAttached = false;
 
-  // 关闭旧标签
   if (publishState.targetTabId) {
     detachDebugger(publishState.targetTabId);
     chrome.tabs.remove(publishState.targetTabId).catch(() => {});
@@ -252,25 +237,18 @@ async function publishNextVideo() {
   const needDebugger = publishState.platform === 'douyin' || (publishState.platform === 'weixin' &&
     (publishState.settings.scheduledPublish || publishState.videos.length > 1));
 
-  if (needDebugger) {
-    const ok = await attachDebugger(tab.id);
-    if (!ok) console.warn('[BG] 调试器附加失败，继续尝试');
-  }
+  if (needDebugger) await attachDebugger(tab.id);
 
   startPublishTimeout();
 }
 
 function getTimeoutMs() {
-  const sec = parseInt(publishState.settings?.timeoutSeconds) || 120;
-  return sec * 1000;
+  return (parseInt(publishState.settings?.timeoutSeconds) || 120) * 1000;
 }
 
 function startPublishTimeout() {
   clearPublishTimeout();
   if (!publishState.settings.autoRetry) return;
-
-  const timeoutMs = getTimeoutMs();
-  console.log('[BG] 启动超时计时器:', timeoutMs, 'ms');
 
   publishState.timeoutTimer = setTimeout(async () => {
     if (!publishState.isPublishing || !publishState.targetTabId) return;
@@ -284,7 +262,6 @@ function startPublishTimeout() {
       console.log('[BG] 超时重试:', idx, `(${currentRetries + 1}/${maxRetries})`);
       sendProgress(`超时重试 (${currentRetries + 1}/${maxRetries})`, 'publishing', idx, publishState.videos.length);
 
-      // 关闭当前标签
       if (publishState.targetTabId) {
         detachDebugger(publishState.targetTabId);
         chrome.tabs.remove(publishState.targetTabId).catch(() => {});
@@ -311,14 +288,11 @@ function startPublishTimeout() {
       await sleep(2000);
       if (publishState.isPublishing) await publishNextVideo();
     }
-  }, timeoutMs);
+  }, getTimeoutMs());
 }
 
 function clearPublishTimeout() {
-  if (publishState.timeoutTimer) {
-    clearTimeout(publishState.timeoutTimer);
-    publishState.timeoutTimer = null;
-  }
+  if (publishState.timeoutTimer) { clearTimeout(publishState.timeoutTimer); publishState.timeoutTimer = null; }
 }
 
 async function finishAllPublish() {
@@ -333,10 +307,7 @@ async function finishAllPublish() {
     publishState.targetTabId = null;
   }
 
-  for (const record of publishState.publishRecords) {
-    await savePublishRecord(record);
-  }
-
+  for (const record of publishState.publishRecords) await savePublishRecord(record);
   chrome.tabs.create({ url: 'http://localhost:3000/' });
 }
 
@@ -346,21 +317,14 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   const needDebugger = publishState.platform === 'douyin' || (publishState.platform === 'weixin' &&
     (publishState.settings.scheduledPublish || publishState.videos.length > 1));
 
-  if (needDebugger && !publishState.debuggerAttached) {
-    if (changeInfo.status === 'loading' || changeInfo.status === 'complete') {
-      await attachDebugger(tabId);
-    }
+  if (needDebugger && !publishState.debuggerAttached && (changeInfo.status === 'loading' || changeInfo.status === 'complete')) {
+    await attachDebugger(tabId);
   }
 
   if (changeInfo.status === 'complete') {
     if (publishState.platform === 'weixin') {
-      if (tab.url && tab.url.includes('/platform/post/list')) {
-        await handleVideoPublishDone();
-        return;
-      }
-      if (tab.url && tab.url.includes('/platform/post/create') && !publishState.commandSent) {
-        await sendPublishCommand(tabId);
-      }
+      if (tab.url && tab.url.includes('/platform/post/list')) { await handleVideoPublishDone(); return; }
+      if (tab.url && tab.url.includes('/platform/post/create') && !publishState.commandSent) await sendPublishCommand(tabId);
     } else {
       await sendPublishCommand(tabId);
     }
@@ -375,12 +339,9 @@ async function handleDouyinPublishDone(message) {
   sendProgress(`完成: ${message.videoName}`, 'done', idx + 1, publishState.videos.length);
 
   publishState.publishRecords.push({
-    videoName: message.videoName,
-    videoPath: message.videoPath || publishState.videoPath || '',
-    platform: 'douyin',
-    publishTime: new Date().toISOString(),
-    scheduled: message.scheduled || false,
-    scheduledTime: publishState.scheduledTime
+    videoName: message.videoName, videoPath: message.videoPath || publishState.videoPath || '',
+    platform: 'douyin', publishTime: new Date().toISOString(),
+    scheduled: message.scheduled || false, scheduledTime: publishState.scheduledTime
   });
 
   if (publishState.targetTabId) detachDebugger(publishState.targetTabId);
@@ -407,12 +368,9 @@ async function handleVideoPublishDone() {
   sendProgress(`完成: ${video.name}`, 'done', idx + 1, publishState.videos.length);
 
   publishState.publishRecords.push({
-    videoName: video.name,
-    videoPath: publishState.videoPath || '',
-    platform: publishState.platform,
-    publishTime: new Date().toISOString(),
-    scheduled: publishState.settings.scheduledPublish || false,
-    scheduledTime: publishState.scheduledTime
+    videoName: video.name, videoPath: publishState.videoPath || '',
+    platform: publishState.platform, publishTime: new Date().toISOString(),
+    scheduled: publishState.settings.scheduledPublish || false, scheduledTime: publishState.scheduledTime
   });
 
   if (publishState.targetTabId) detachDebugger(publishState.targetTabId);
@@ -459,12 +417,8 @@ async function sendPublishCommand(tabId) {
   const video = publishState.videos[publishState.currentIndex];
   try {
     await chrome.tabs.sendMessage(tabId, {
-      action: 'startPublish',
-      videos: [video],
-      settings: publishState.settings,
-      videoPath: publishState.videoPath,
-      videoIndex: publishState.currentIndex,
-      totalVideos: publishState.videos.length
+      action: 'startPublish', videos: [video], settings: publishState.settings,
+      videoPath: publishState.videoPath, videoIndex: publishState.currentIndex, totalVideos: publishState.videos.length
     });
   } catch (error) {
     console.error('[BG] 发送发布命令失败:', error);
@@ -474,8 +428,7 @@ async function sendPublishCommand(tabId) {
 
 function sendProgress(step, detail, current, total, done) {
   chrome.runtime.sendMessage({
-    action: 'progressUpdate',
-    step, detail, current, total, done: !!done,
+    action: 'progressUpdate', step, detail, current, total, done: !!done,
     videoIndex: publishState.currentIndex,
     status: detail === 'done' ? 'done' : (detail === 'error' ? 'error' : (detail === 'publishing' ? 'publishing' : 'pending'))
   }).catch(() => {});
@@ -483,11 +436,11 @@ function sendProgress(step, detail, current, total, done) {
 
 function getAIProviderConfig(provider, apiKey, model, prompt) {
   const configs = {
-    mimo: { url: 'https://api.xiaomimimo.com/v1/chat/completions', headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' }, body: { model: model || 'mimo-v2.5', messages: [{ role: 'user', content: prompt }], temperature: 0.7 }, extract: (data) => data.choices?.[0]?.message?.content || data.choices?.[0]?.message?.reasoning_content || '' },
-    openai: { url: 'https://api.openai.com/v1/chat/completions', headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' }, body: { model: model || 'gpt-4o-mini', messages: [{ role: 'user', content: prompt }], temperature: 0.7 }, extract: (data) => data.choices?.[0]?.message?.content || '' },
-    gemini: { url: `https://generativelanguage.googleapis.com/v1beta/models/${model || 'gemini-2.0-flash'}:generateContent?key=${apiKey}`, headers: { 'Content-Type': 'application/json' }, body: { contents: [{ parts: [{ text: prompt }] }] }, extract: (data) => data.candidates?.[0]?.content?.parts?.[0]?.text || '' },
-    doubao: { url: 'https://ark.cn-beijing.volces.com/api/v3/chat/completions', headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' }, body: { model: model || 'doubao-seed-2-0-mini-260215', messages: [{ role: 'user', content: prompt }], temperature: 0.7 }, extract: (data) => data.choices?.[0]?.message?.content || '' },
-    deepseek: { url: 'https://api.deepseek.com/v1/chat/completions', headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' }, body: { model: model || 'deepseek-chat', messages: [{ role: 'user', content: prompt }], temperature: 0.7 }, extract: (data) => data.choices?.[0]?.message?.content || '' }
+    mimo: { url: 'https://api.xiaomimimo.com/v1/chat/completions', headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' }, body: { model: model || 'mimo-v2.5', messages: [{ role: 'user', content: prompt }], temperature: 0.7 }, extract: (d) => d.choices?.[0]?.message?.content || d.choices?.[0]?.message?.reasoning_content || '' },
+    openai: { url: 'https://api.openai.com/v1/chat/completions', headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' }, body: { model: model || 'gpt-4o-mini', messages: [{ role: 'user', content: prompt }], temperature: 0.7 }, extract: (d) => d.choices?.[0]?.message?.content || '' },
+    gemini: { url: `https://generativelanguage.googleapis.com/v1beta/models/${model || 'gemini-2.0-flash'}:generateContent?key=${apiKey}`, headers: { 'Content-Type': 'application/json' }, body: { contents: [{ parts: [{ text: prompt }] }] }, extract: (d) => d.candidates?.[0]?.content?.parts?.[0]?.text || '' },
+    doubao: { url: 'https://ark.cn-beijing.volces.com/api/v3/chat/completions', headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' }, body: { model: model || 'doubao-seed-2-0-mini-260215', messages: [{ role: 'user', content: prompt }], temperature: 0.7 }, extract: (d) => d.choices?.[0]?.message?.content || '' },
+    deepseek: { url: 'https://api.deepseek.com/v1/chat/completions', headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' }, body: { model: model || 'deepseek-chat', messages: [{ role: 'user', content: prompt }], temperature: 0.7 }, extract: (d) => d.choices?.[0]?.message?.content || '' }
   };
   return configs[provider] || null;
 }
@@ -514,10 +467,7 @@ async function generateAIContent(videoName, settings) {
   try {
     const text = await callAIApi(settings.aiProvider, settings.aiKey, settings.aiModel, prompt);
     if (text) {
-      try {
-        const m = text.match(/\{[\s\S]*\}/);
-        if (m) { const p = JSON.parse(m[0]); return { topics: (p.topics || p.tags || []).slice(0, 5), description: p.description || p.desc || '' }; }
-      } catch (_) {}
+      try { const m = text.match(/\{[\s\S]*\}/); if (m) { const p = JSON.parse(m[0]); return { topics: (p.topics || p.tags || []).slice(0, 5), description: p.description || p.desc || '' }; } } catch (_) {}
       return { topics: (text.match(/#[\u4e00-\u9fa5\w]+/g) || []).slice(0, 5), description: text.split('\n').map(l => l.trim()).filter(l => l && !l.includes('#') && l.length > 10).slice(0, 3).join(' ').substring(0, 200) };
     }
     return { topics: [], description: '', error: 'AI返回为空' };
@@ -528,16 +478,9 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 function calculateScheduledTime(videoIndex, firstVideoScheduled = false) {
   let baseTime;
-  if (videoIndex === 0 && publishState.scheduledTime) {
-    baseTime = new Date(publishState.scheduledTime);
-  } else if (publishState.scheduledTime) {
-    baseTime = new Date(publishState.scheduledTime);
-    baseTime.setMinutes(baseTime.getMinutes() + 40 + Math.floor(Math.random() * 49));
-  } else {
-    baseTime = new Date();
-    if (firstVideoScheduled) baseTime.setMinutes(baseTime.getMinutes() + 5 + Math.floor(Math.random() * 10));
-    if (videoIndex > 0) baseTime.setMinutes(baseTime.getMinutes() + 40 + Math.floor(Math.random() * 49));
-  }
+  if (videoIndex === 0 && publishState.scheduledTime) { baseTime = new Date(publishState.scheduledTime); }
+  else if (publishState.scheduledTime) { baseTime = new Date(publishState.scheduledTime); baseTime.setMinutes(baseTime.getMinutes() + 40 + Math.floor(Math.random() * 49)); }
+  else { baseTime = new Date(); if (firstVideoScheduled) baseTime.setMinutes(baseTime.getMinutes() + 5 + Math.floor(Math.random() * 10)); if (videoIndex > 0) baseTime.setMinutes(baseTime.getMinutes() + 40 + Math.floor(Math.random() * 49)); }
   const p = v => String(v).padStart(2, '0');
   const timeStr = `${baseTime.getFullYear()}-${p(baseTime.getMonth()+1)}-${p(baseTime.getDate())} ${p(baseTime.getHours())}:${p(baseTime.getMinutes())}`;
   publishState.scheduledTime = baseTime.toISOString();
@@ -545,9 +488,7 @@ function calculateScheduledTime(videoIndex, firstVideoScheduled = false) {
 }
 
 async function savePublishRecord(record) {
-  try {
-    await fetch('http://localhost:3000/api/publish-record', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(record) });
-  } catch (_) {}
+  try { await fetch('http://localhost:3000/api/publish-record', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(record) }); } catch (_) {}
 }
 
 console.log('[Background] Service Worker 已启动');
