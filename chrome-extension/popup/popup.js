@@ -272,16 +272,15 @@ class PopupController {
 
   async confirmSkip(index) {
     const videoName = this.selectedVideos[index]?.name;
-    // ★ 写入 storage：记录被跳过的视频名
+    // ★ 写入 storage：只记录视频名，不修改数组
     try {
       const data = await chrome.storage.local.get('_vpe_skip_names');
       const arr = data['_vpe_skip_names'] || [];
       if (!arr.includes(videoName)) arr.push(videoName);
       await chrome.storage.local.set({ '_vpe_skip_names': arr });
     } catch (_) {}
-    // 从本地列表移除
-    this.videoStatuses.splice(index, 1);
-    this.selectedVideos.splice(index, 1);
+    // 标记状态为 skipped（不从 selectedVideos 移除，保持索引对齐）
+    this.videoStatuses[index] = 'skipped';
     this.skipConfirmIndex = -1;
     this.renderQueue();
     this.updateStatus(`已跳过: ${videoName}`);
