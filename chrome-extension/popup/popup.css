@@ -47,70 +47,24 @@ body {
 .publish-btn:hover { opacity: 0.85; }
 .publish-btn.running { background: var(--danger); color: var(--danger-text); }
 
-/* ========== 传送带动画 ========== */
+/* ========== 发布中小动画 ========== */
 .publish-animation {
-  padding: 8px 10px; margin-bottom: 2px;
+  display: flex; align-items: center; gap: 12px;
+  padding: 8px 14px; margin-bottom: 2px;
   background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px;
+  overflow: hidden;
 }
 .publish-animation.hidden { display: none; }
 
-.belt-track {
-  position: relative; padding: 8px 0;
-}
-.belt-line {
-  position: absolute; top: 50%; left: 0; right: 0; height: 3px; margin-top: -1px;
-  background: var(--border); border-radius: 2px; overflow: hidden;
-}
-.belt-line::after {
-  content: ''; position: absolute; top: 0; left: -100%; width: 60%; height: 100%;
-  background: linear-gradient(90deg, transparent, var(--accent), transparent);
-  animation: beltFlow 2s linear infinite;
-}
-@keyframes beltFlow { to { left: 200%; } }
-
-.belt-items {
-  position: relative; display: flex; gap: 6px; overflow-x: auto;
-  padding: 2px 0; z-index: 1;
-}
-.belt-items::-webkit-scrollbar { display: none; }
-
-.belt-item {
-  display: flex; flex-direction: column; align-items: center; gap: 2px;
-  min-width: 42px; padding: 4px 6px;
-  background: var(--bg-input); border: 1px solid var(--border); border-radius: 6px;
-  transition: all 0.3s;
-}
-.belt-icon { font-size: 14px; line-height: 1; }
-.belt-label { font-size: 8px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 40px; }
-
-.belt-item.active {
-  border-color: var(--accent); background: rgba(18,197,8,0.08);
-  animation: beltPulse 1.5s ease-in-out infinite;
-}
-.belt-item.active .belt-icon { animation: iconBounce 0.8s ease-in-out infinite; }
-.belt-item.done {
-  border-color: var(--dot-on); background: rgba(18,197,8,0.06);
-}
-.belt-item.done .belt-icon { color: var(--dot-on); font-size: 12px; }
-.belt-item.skipped { opacity: 0.35; }
-.belt-item.skipped .belt-label { text-decoration: line-through; }
-.belt-item.error { border-color: var(--dot-off); }
-.belt-item.error .belt-icon { color: var(--dot-off); }
-.belt-item.belt-more { font-size: 10px; color: var(--text-3); min-width: 30px; align-items: center; justify-content: center; border-style: dashed; }
-
-@keyframes beltPulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(18,197,8,0.3); }
-  50% { box-shadow: 0 0 8px 2px rgba(18,197,8,0.15); }
-}
-@keyframes iconBounce {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-3px); }
-}
-
-.anim-status {
-  margin-top: 6px; font-size: 11px; color: var(--text-2);
-  text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
+.anim-scene { position: relative; width: 120px; height: 32px; flex-shrink: 0; }
+.anim-person { position: absolute; left: 0; bottom: 2px; animation: walkBounce 0.5s ease-in-out infinite; font-size: 20px; line-height: 1; }
+.anim-box { position: absolute; right: 10px; bottom: 4px; font-size: 16px; animation: boxBob 0.5s ease-in-out infinite; }
+@keyframes walkBounce { 0%,100%{transform:translateY(0)} 25%{transform:translateY(-4px)} 50%{transform:translateY(-2px)} 75%{transform:translateY(-5px)} }
+@keyframes boxBob { 0%,100%{transform:translateY(0) rotate(0deg)} 30%{transform:translateY(-6px) rotate(-8deg)} 70%{transform:translateY(-3px) rotate(5deg)} }
+.anim-trail { position: absolute; bottom: 0; left: 24px; right: 0; height: 2px; background: repeating-linear-gradient(90deg, var(--accent) 0px, var(--accent) 4px, transparent 4px, transparent 8px); opacity: 0.5; animation: trailMove 0.8s linear infinite; }
+@keyframes trailMove { from{background-position:0 0} to{background-position:16px 0} }
+.anim-label { font-size: 12px; color: var(--text-2); white-space: nowrap; flex: 1; animation: labelPulse 2s ease-in-out infinite; }
+@keyframes labelPulse { 0%,100%{opacity:0.6} 50%{opacity:1} }
 
 /* 进度条 */
 .progress-bar { height: 3px; background: var(--border); border-radius: 2px; overflow: hidden; margin-bottom: 6px; }

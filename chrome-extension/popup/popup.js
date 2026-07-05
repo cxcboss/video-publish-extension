@@ -20,26 +20,6 @@ class PopupController {
     this.listenProgress();
   }
 
-  // ========== 跳过：直接写 storage ==========
-
-  async writeSkipToStorage(index) {
-    const key = '_vpe_skipped_indices';
-    try {
-      const data = await chrome.storage.local.get(key);
-      const arr = data[key] || [];
-      if (!arr.includes(index)) arr.push(index);
-      await chrome.storage.local.set({ [key]: arr });
-      console.log('[Popup] 写入跳过索引:', index, '全部:', arr);
-    } catch (e) { console.error('[Popup] 写入跳过失败:', e); }
-  }
-
-  async readSkipFromStorage() {
-    try {
-      const data = await chrome.storage.local.get('_vpe_skipped_indices');
-      return new Set(data._vpe_skipped_indices || []);
-    } catch (_) { return new Set(); }
-  }
-
   // ========== 事件绑定 ==========
 
   bindEvents() {
@@ -291,13 +271,20 @@ class PopupController {
   }
 
   async confirmSkip(index) {
-    this.videoStatuses[index] = 'skipped';
+    const videoName = this.selectedVideos[index]?.name;
+    // ★ 写入 storage：记录被跳过的视频名
+    try {
+      const data = await chrome.storage.local.get('_vpe_skip_names');
+      const arr = data['_vpe_skip_names'] || [];
+      if (!arr.includes(videoName)) arr.push(videoName);
+      await chrome.storage.local.set({ '_vpe_skip_names': arr });
+    } catch (_) {}
+    // 从本地列表移除
+    this.videoStatuses.splice(index, 1);
+    this.selectedVideos.splice(index, 1);
     this.skipConfirmIndex = -1;
     this.renderQueue();
-    // ★ 核心修复：直接写 storage，不依赖消息传递
-    await this.writeSkipToStorage(index);
-    // 同时发消息通知 background（作为辅助，不依赖其可靠性）
-    try { chrome.runtime.sendMessage({ action: 'skipVideo', index }); } catch (_) {}
+    this.updateStatus(`已跳过: ${videoName}`);
   }
 
   fmtSize(b) {
@@ -331,47 +318,16 @@ class PopupController {
     }
   }
 
-  // ========== 传送带动画 ==========
+  // ========== 动画 ==========
 
-  updateAnimation(currentName, currentIdx, total, statusText) {
-    const belt = document.getElementById('anim-belt');
-    const status = document.getElementById('anim-status');
-    if (!belt || !status) return;
-
-    // 构建传送带内容
-    let html = '';
-    const maxShow = Math.min(total, 8);
-    for (let i = 0; i < maxShow; i++) {
-      const s = this.videoStatuses[i] || 'pending';
-      let cls = 'belt-item';
-      if (s === 'done') cls += ' done';
-      else if (s === 'publishing' || (i === currentIdx && !this.videoStatuses[i])) cls += ' active';
-      else if (s === 'skipped') cls += ' skipped';
-      else if (s === 'error') cls += ' error';
-
-      // 只显示缩写文件名
-      const shortName = this.selectedVideos[i]?.name || '';
-      const label = shortName.length > 8 ? shortName.substring(0, 6) + '..' : shortName;
-
-      html += `<div class="${cls}" title="${shortName}">
-        <span class="belt-icon">${s === 'done' ? '✓' : s === 'skipped' ? '—' : s === 'error' ? '✗' : '🎬'}</span>
-        <span class="belt-label">${label}</span>
-      </div>`;
-    }
-    if (total > maxShow) {
-      html += `<div class="belt-item belt-more">+${total - maxShow}</div>`;
-    }
-    belt.innerHTML = html;
-
-    // 状态文字
-    status.textContent = statusText || (currentName ? `发布中：${currentName}（${currentIdx + 1}/${total}）` : '准备中...');
+  updateAnimationLabel(text) {
+    const label = document.getElementById('anim-label');
+    if (label) label.textContent = text;
   }
 
   hideAnimation() {
-    const belt = document.getElementById('anim-belt');
-    const status = document.getElementById('anim-status');
-    if (belt) belt.innerHTML = '';
-    if (status) status.textContent = '';
+    const label = document.getElementById('anim-label');
+    if (label) label.textContent = '';
   }
 
   // ========== 进度 ==========
@@ -404,10 +360,9 @@ class PopupController {
       document.getElementById('progress-detail').textContent = detail || `${current} / ${total}`;
     }
 
-    // 更新传送带动画
+    // 更新动画文字
     const curVideo = this.selectedVideos[videoIndex] || this.selectedVideos[this.selectedVideos.length - 1];
-    const curName = curVideo?.name || '';
-    this.updateAnimation(curName, videoIndex || 0, this.selectedVideos.length, step);
+    this.updateAnimationLabel(step || (curVideo ? `发布中：${curVideo.name}（${(videoIndex || 0) + 1}/${this.selectedVideos.length}）` : '发布中...'));
 
     if (done) {
       setTimeout(() => {
@@ -439,7 +394,7 @@ class PopupController {
     this.videoStatuses = this.selectedVideos.map(() => 'pending');
     this.skipConfirmIndex = -1;
     this.renderQueue();
-    this.updateAnimation(this.selectedVideos[0]?.name, 0, this.selectedVideos.length, '准备发布...');
+    this.updateAnimationLabel(`准备发布 ${this.selectedVideos.length} 个视频...`);
 
     const settings = {
       autoGenerate: autoGen,

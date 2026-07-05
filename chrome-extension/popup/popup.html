@@ -16,16 +16,17 @@
         <span class="status-text" id="status-text">检测中...</span>
       </div>
       <button id="publish-btn" class="publish-btn">发布</button>
-      <span class="version" id="version-text">v2.6.4</span>
+      <span class="version" id="version-text">v2.6.5</span>
     </div>
 
-    <!-- 传送带动画 -->
+    <!-- 发布中小动画 -->
     <div id="publish-animation" class="publish-animation hidden">
-      <div class="belt-track">
-        <div class="belt-line"></div>
-        <div id="anim-belt" class="belt-items"></div>
+      <div class="anim-scene">
+        <div class="anim-box" id="anim-box">📦</div>
+        <div class="anim-person" id="anim-person">🧑‍💻</div>
+        <div class="anim-trail"></div>
       </div>
-      <div class="anim-status" id="anim-status"></div>
+      <div class="anim-label" id="anim-label">发布中...</div>
     </div>
 
     <!-- 发布进度 -->
