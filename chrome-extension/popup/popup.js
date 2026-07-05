@@ -253,15 +253,16 @@ class PopupController {
       btn.addEventListener('click', (e) => { e.stopPropagation(); this.skipConfirmIndex = -1; this.renderQueue(); });
     });
 
-    if (this.isPublishing) {
-      c.querySelectorAll('.queue-item').forEach(item => {
-        const idx = parseInt(item.dataset.index);
-        if (this.videoStatuses[idx] === 'pending') {
-          item.style.cursor = 'pointer';
-          item.addEventListener('click', () => this.showSkipConfirm(idx));
-        }
-      });
-    }
+    // 跳过功能暂时隐藏
+    // if (this.isPublishing) {
+    //   c.querySelectorAll('.queue-item').forEach(item => {
+    //     const idx = parseInt(item.dataset.index);
+    //     if (this.videoStatuses[idx] === 'pending') {
+    //       item.style.cursor = 'pointer';
+    //       item.addEventListener('click', () => this.showSkipConfirm(idx));
+    //     }
+    //   });
+    // }
   }
 
   showSkipConfirm(index) {
