@@ -21,20 +21,32 @@ class DouyinPublisher {
     this.isReady = false;
     this.defaultTopics = ['#动画', '#奇葩游戏', '#游戏视频', '#小游戏', '#休闲游戏'];
     this.aborted = false;
+    this.abortCheckInterval = null;
     this.init();
   }
 
   init() {
+    // ★ storage 变化监听 — 最可靠的中止信号通道
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area === 'local' && changes['_vpe_abort'] && changes['_vpe_abort'].newValue) {
+        this.aborted = true;
+        console.log('[抖音发布助手] storage 中止信号');
+      }
+    });
+
     chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (message.action === 'startPublish') {
         this.aborted = false;
+        this.startAbortCheck();
         this.publishSingleVideo(message.videos[0], message.settings, message.videoPath, message.videoIndex, message.totalVideos)
           .then(() => {
+            this.stopAbortCheck();
             if (this.aborted) return;
             this.notifyProgress('发布完成', message.videoIndex + 1, message.totalVideos, 'done');
             sendResponse({ success: true });
           })
           .catch(error => {
+            this.stopAbortCheck();
             if (this.aborted) return;
             console.error('[抖音发布助手] 发布失败:', error);
             this.notifyProgress('发布失败: ' + error.message, message.videoIndex + 1, message.totalVideos, 'error');
@@ -48,12 +60,26 @@ class DouyinPublisher {
       }
       if (message.action === 'abortPublish') {
         this.aborted = true;
-        console.log('[抖音发布助手] 收到中止信号');
+        console.log('[抖音发布助手] 消息中止信号');
         sendResponse({ aborted: true });
         return true;
       }
     });
     this.isReady = true;
+  }
+
+  startAbortCheck() {
+    this.stopAbortCheck();
+    this.abortCheckInterval = setInterval(() => {
+      if (this.aborted) {
+        console.log('[抖音发布助手] 定时检查: 已中止');
+        this.stopAbortCheck();
+      }
+    }, 200);
+  }
+
+  stopAbortCheck() {
+    if (this.abortCheckInterval) { clearInterval(this.abortCheckInterval); this.abortCheckInterval = null; }
   }
 
   async publishSingleVideo(video, settings, videoPath, videoIndex, totalVideos) {

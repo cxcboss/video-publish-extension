@@ -74,11 +74,21 @@ class WeixinPublisher {
     console.log('[视频号发布助手] 初始化中...', this.isInIframe ? '(iframe内)' : '(主页面)');
 
     this.aborted = false;
+    this.abortCheckInterval = null;
     this.setupMutationObserver();
+
+    // ★ storage 变化监听 — 最可靠的中止信号通道
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area === 'local' && changes['_vpe_abort'] && changes['_vpe_abort'].newValue) {
+        this.aborted = true;
+        console.log('[视频号发布助手] storage 中止信号');
+      }
+    });
 
     chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (message.action === 'startPublish') {
         this.aborted = false;
+        this.startAbortCheck();
         this.handlePublish(message, sendResponse);
         return true;
       }
@@ -96,7 +106,7 @@ class WeixinPublisher {
 
       if (message.action === 'abortPublish') {
         this.aborted = true;
-        console.log('[视频号发布助手] 收到中止信号');
+        console.log('[视频号发布助手] 消息中止信号');
         sendResponse({ aborted: true });
         return true;
       }
@@ -104,6 +114,20 @@ class WeixinPublisher {
 
     this.isReady = true;
     console.log('[视频号发布助手] 初始化完成');
+  }
+
+  startAbortCheck() {
+    this.stopAbortCheck();
+    this.abortCheckInterval = setInterval(() => {
+      if (this.aborted) {
+        console.log('[视频号发布助手] 定时检查: 已中止');
+        this.stopAbortCheck();
+      }
+    }, 200);
+  }
+
+  stopAbortCheck() {
+    if (this.abortCheckInterval) { clearInterval(this.abortCheckInterval); this.abortCheckInterval = null; }
   }
 
   setupMutationObserver() {
@@ -126,18 +150,24 @@ class WeixinPublisher {
     try {
       if (this.isInIframe) {
         await this.publishSingleVideo(
-          message.videos[0], 
-          message.settings, 
-          message.videoPath, 
-          message.videoIndex, 
+          message.videos[0],
+          message.settings,
+          message.videoPath,
+          message.videoIndex,
           message.totalVideos
         );
+        this.stopAbortCheck();
+        if (this.aborted) return;
         sendResponse({ success: true });
       } else {
         await this.publishFromMainPage(message);
+        this.stopAbortCheck();
+        if (this.aborted) return;
         sendResponse({ success: true });
       }
     } catch (error) {
+      this.stopAbortCheck();
+      if (this.aborted) return;
       console.error('[视频号发布助手] 发布失败:', error);
       this.notifyProgress(message.videoIndex + 1, message.totalVideos, message.videos[0].name, 'error');
       sendResponse({ success: false, error: error.message });
