@@ -263,6 +263,16 @@ function startPublishTimeout() {
       if (publishState.isPublishing) await publishNextVideo();
     } else {
       sendProgress(`重试${max}次仍超时，跳过`, 'error', idx, publishState.videos.length);
+      // 记录失败
+      const failedVideo = publishState.videos[idx];
+      if (failedVideo) {
+        publishState.publishRecords.push({
+          videoName: failedVideo.name, videoPath: publishState.videoPath || '',
+          platform: publishState.platform, publishTime: new Date().toISOString(),
+          status: 'failed', error: `超时重试${max}次后失败`,
+          scheduled: false, scheduledTime: null
+        });
+      }
       publishState.currentIndex++;
       await sleep(2000);
       _doneLock = false;
@@ -320,7 +330,7 @@ async function handleDouyinPublishDone(message) {
   publishState.publishRecords.push({
     videoName: message.videoName, videoPath: message.videoPath || publishState.videoPath || '',
     platform: 'douyin', publishTime: new Date().toISOString(),
-    scheduled: message.scheduled || false, scheduledTime: publishState.scheduledTime
+    status: 'success', scheduled: message.scheduled || false, scheduledTime: publishState.scheduledTime
   });
   if (publishState.targetTabId) detachDebugger(publishState.targetTabId);
   publishState.currentIndex++; publishState.debuggerAttached = false; publishState.commandSent = false;
@@ -341,7 +351,7 @@ async function handleVideoPublishDone() {
   publishState.publishRecords.push({
     videoName: video.name, videoPath: publishState.videoPath || '',
     platform: publishState.platform, publishTime: new Date().toISOString(),
-    scheduled: publishState.settings.scheduledPublish || false, scheduledTime: publishState.scheduledTime
+    status: 'success', scheduled: publishState.settings.scheduledPublish || false, scheduledTime: publishState.scheduledTime
   });
   if (publishState.targetTabId) detachDebugger(publishState.targetTabId);
   publishState.currentIndex++; publishState.debuggerAttached = false; publishState.commandSent = false;
