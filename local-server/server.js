@@ -473,14 +473,14 @@ app.get('/api/videos', (req, res) => {
   }
 
   try {
-    const files = fs.readdirSync(dirPath);
+    const files = fs.readdirSync(resolved);
     const videos = files
       .filter(file => {
         const ext = path.extname(file).toLowerCase();
         return VIDEO_EXTENSIONS.includes(ext);
       })
       .map(file => {
-        const filePath = path.join(dirPath, file);
+        const filePath = path.join(resolved, file);
         const stats = fs.statSync(filePath);
         return {
           name: file,
@@ -565,11 +565,11 @@ app.get('/api/video/info', (req, res) => {
   }
 
   try {
-    const stats = fs.statSync(filePath);
-    const ext = path.extname(filePath).toLowerCase();
-    
+    const stats = fs.statSync(resolved);
+    const ext = path.extname(resolved).toLowerCase();
+
     res.json({
-      name: path.basename(filePath),
+      name: path.basename(resolved),
       path: filePath,
       size: stats.size,
       extension: ext,

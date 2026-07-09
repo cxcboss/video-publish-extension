@@ -412,7 +412,6 @@ class DouyinPublisher {
 
   notifyProgress(step, current, total, status) {
     try {
-      chrome.runtime.sendMessage({ action: 'publishProgress', status: step, current, total }).catch(() => {});
       chrome.runtime.sendMessage({
         action: 'progressUpdate', step, detail: status || 'publishing',
         current, total, videoIndex: current - 1, status: status || 'publishing'
