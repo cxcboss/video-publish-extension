@@ -320,7 +320,11 @@ async function sendPublishCommand(tabId) {
     } catch (_) {}
     await sleep(1000);
   }
-  if (!best || max < 10 || !publishState.isPublishing) { publishState.isPublishing = false; return; }
+  if (!best || max < 10 || !publishState.isPublishing) {
+    console.log('[BG] 内容脚本未就绪，等待超时重试...');
+    publishState.commandSent = false;
+    return;
+  }
   publishState.commandSent = true;
   const video = publishState.videos[publishState.currentIndex];
   try {
@@ -328,7 +332,10 @@ async function sendPublishCommand(tabId) {
       action: 'startPublish', videos: [video], settings: publishState.settings,
       videoPath: publishState.videoPath, videoIndex: publishState.currentIndex, totalVideos: publishState.videos.length
     });
-  } catch (_) { publishState.isPublishing = false; }
+  } catch (e) {
+    console.error('[BG] 发送发布命令失败:', e.message, '等待超时重试...');
+    publishState.commandSent = false;
+  }
 }
 
 // ========== 进度通知 ==========
