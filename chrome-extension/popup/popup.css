@@ -49,45 +49,30 @@ body {
 
 /* ========== 发布中状态卡片 ========== */
 .publish-animation {
-  padding: 0; margin-bottom: 2px;
-  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
-  border: 1px solid rgba(99,179,237,0.2); border-radius: 10px;
+  padding: 10px 12px; margin-bottom: 2px;
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px;
   overflow: hidden;
-  animation: cardFadeIn 0.3s ease-out;
 }
 .publish-animation.hidden { display: none; }
 
-@keyframes cardFadeIn { from{opacity:0;transform:translateY(-4px)} to{opacity:1;transform:translateY(0)} }
-
-.anim-timer-box { padding: 12px 14px; text-align: center; }
+.anim-timer-box { text-align: center; }
 
 .anim-timer-label {
-  font-size: 13px; font-weight: 600; color: #e2e8f0;
-  margin-bottom: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  animation: labelGlow 2s ease-in-out infinite;
+  font-size: 12px; font-weight: 600; color: var(--text);
+  margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-@keyframes labelGlow { 0%,100%{opacity:0.8} 50%{opacity:1} }
 
 .anim-timer {
-  font-size: 28px; font-weight: 700; color: #63b3ed;
-  font-variant-numeric: tabular-nums; letter-spacing: 2px;
-  margin-bottom: 4px; min-height: 36px;
-  text-shadow: 0 0 12px rgba(99,179,237,0.3);
+  font-size: 24px; font-weight: 700; color: var(--accent);
+  font-variant-numeric: tabular-nums; letter-spacing: 1px;
+  margin-bottom: 3px; min-height: 30px;
 }
 
 .anim-timer-detail {
-  font-size: 10px; color: rgba(226,232,240,0.5); margin-bottom: 6px;
+  font-size: 10px; color: var(--text-3);
   font-variant-numeric: tabular-nums;
   min-height: 14px;
 }
-
-.anim-timer-indicator { display: flex; justify-content: center; }
-.dot-pulse {
-  display: inline-block; width: 6px; height: 6px; border-radius: 50%;
-  background: #63b3ed;
-  animation: pulseDot 1.2s ease-in-out infinite;
-}
-@keyframes pulseDot { 0%,100%{transform:scale(0.8);opacity:0.4} 50%{transform:scale(1.2);opacity:1} }
 
 /* 进度条 */
 .progress-bar { height: 3px; background: var(--border); border-radius: 2px; overflow: hidden; margin-bottom: 6px; }

@@ -222,35 +222,53 @@ function getTimeoutMs() { return (parseInt(publishState.settings?.timeoutSeconds
 function startPublishTimeout() {
   clearPublishTimeout();
   if (!publishState.settings.autoRetry) return;
+  const timeoutMs = getTimeoutMs();
+  console.log(`[BG] 启动超时定时器: ${timeoutMs}ms (${publishState.settings.timeoutSeconds}s), autoRetry=${publishState.settings.autoRetry}`);
+  const currentIdx = publishState.currentIndex;
   publishState.timeoutTimer = setTimeout(async () => {
     if (!publishState.isPublishing || !publishState.targetTabId) return;
+    if (publishState.currentIndex !== currentIdx) return; // 已切换到下一个视频，忽略
+
+    // ★ 立即锁定，防止 done 处理器并发执行导致重复发布
+    if (_doneLock) return;
+    _doneLock = true;
+
     const idx = publishState.currentIndex;
     const retries = publishState.retryCounts[idx] || 0;
     const max = publishState.settings.maxRetries || 1;
+    const cmdSent = publishState.commandSent;
+
+    console.log(`[BG] 超时触发 (retries=${retries}, max=${max}, commandSent=${cmdSent})`);
+
+    // 立即中止内容脚本 + 设置 storage 标志
+    const tabId = publishState.targetTabId;
+    try { await chrome.tabs.sendMessage(tabId, { action: 'abortPublish' }); } catch (_) {}
+    await setAbortFlag();
+
+    // 等待一小段时间让内容脚本处理 abort
+    await sleep(300);
+
+    // 关闭标签页并清理
+    if (tabId) { try { await chrome.tabs.remove(tabId); } catch (_) {} }
+    detachDebugger(tabId);
+    publishState.targetTabId = null;
+    publishState.debuggerAttached = false;
+    publishState.commandSent = false;
+
     if (retries < max) {
       publishState.retryCounts[idx] = retries + 1;
-      console.log(`[BG] 超时重试 (${retries + 1}/${max})`);
-      // ★ 立即中止内容脚本并关闭标签页
-      try { await chrome.tabs.sendMessage(publishState.targetTabId, { action: 'abortPublish' }); } catch (_) {}
-      await setAbortFlag();
-      await sleep(300);
-      if (publishState.targetTabId) { detachDebugger(publishState.targetTabId); chrome.tabs.remove(publishState.targetTabId).catch(() => {}); publishState.targetTabId = null; }
-      publishState.debuggerAttached = false; publishState.commandSent = false;
       sendProgress(`超时重试 (${retries + 1}/${max})`, 'publishing', idx, publishState.videos.length);
       await sleep(1000);
+      _doneLock = false;
       if (publishState.isPublishing) await publishNextVideo();
     } else {
-      console.log(`[BG] 重试${max}次仍超时，跳过`);
-      try { await chrome.tabs.sendMessage(publishState.targetTabId, { action: 'abortPublish' }); } catch (_) {}
-      await setAbortFlag();
-      await sleep(300);
       sendProgress(`重试${max}次仍超时，跳过`, 'error', idx, publishState.videos.length);
-      if (publishState.targetTabId) { detachDebugger(publishState.targetTabId); chrome.tabs.remove(publishState.targetTabId).catch(() => {}); publishState.targetTabId = null; }
-      publishState.currentIndex++; publishState.debuggerAttached = false; publishState.commandSent = false;
+      publishState.currentIndex++;
       await sleep(2000);
+      _doneLock = false;
       if (publishState.isPublishing) await publishNextVideo();
     }
-  }, getTimeoutMs());
+  }, timeoutMs);
 }
 
 function clearPublishTimeout() { if (publishState.timeoutTimer) { clearTimeout(publishState.timeoutTimer); publishState.timeoutTimer = null; } }

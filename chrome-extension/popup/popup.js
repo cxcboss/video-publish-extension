@@ -326,7 +326,7 @@ class PopupController {
     }
   }
 
-  // ========== 动画 ==========
+  // ========== 发布状态 ==========
 
   startPublishTimer(platformName, videoIndex, total, retryCount, timeoutSec) {
     this.stopPublishTimer();
@@ -335,41 +335,32 @@ class PopupController {
     this.timerTotal = total;
     this.timerRetry = retryCount || 0;
     this.timerTimeout = timeoutSec || 120;
-    this.timerInterval = setInterval(() => {
-      const elapsed = Math.floor((Date.now() - this.publishStartTime) / 1000);
-      const min = Math.floor(elapsed / 60);
-      const sec = elapsed % 60;
-      const timer = document.getElementById('anim-timer');
-      const detail = document.getElementById('anim-detail');
-      if (timer) timer.textContent = `${String(min).padStart(2,'0')}:${String(sec).padStart(2,'0')}`;
-      if (detail) detail.textContent = `已用时 ${elapsed}s · 超时 ${this.timerTimeout}s${this.timerRetry ? ' · 重试 ' + this.timerRetry + '次' : ''}`;
-    }, 1000);
+    this.updateTimerDisplay();
+    this.timerInterval = setInterval(() => this.updateTimerDisplay(), 1000);
+  }
+
+  updateTimerDisplay() {
+    const elapsed = Math.floor((Date.now() - this.publishStartTime) / 1000);
+    const min = Math.floor(elapsed / 60);
+    const sec = elapsed % 60;
+    const timer = document.getElementById('anim-timer');
+    const label = document.getElementById('anim-label');
+    const detail = document.getElementById('anim-detail');
+    if (timer) timer.textContent = `${String(min).padStart(2,'0')}:${String(sec).padStart(2,'0')}`;
+    if (label) label.textContent = `在${this.timerPlatform}发布第${this.timerVideoIndex + 1}个，共${this.timerTotal}个`;
+    if (detail) detail.textContent = `超时 ${this.timerTimeout}s${this.timerRetry ? ' · 已重试 ' + this.timerRetry + ' 次' : ''}`;
   }
 
   stopPublishTimer() {
     if (this.timerInterval) { clearInterval(this.timerInterval); this.timerInterval = null; }
   }
 
-  updateTimerLabel() {
-    const label = document.getElementById('anim-label');
-    const detail = document.getElementById('anim-detail');
-    if (label) label.textContent = `在${this.timerPlatform}发布第${this.timerVideoIndex + 1}个，共${this.timerTotal}个`;
-    if (detail) detail.textContent = `已用时 0s · 超时 ${this.timerTimeout}s`;
-  }
-
-  updateAnimationLabel(text) {
-    const label = document.getElementById('anim-label');
-    if (label) label.textContent = text;
-  }
-
   hideAnimation() {
     this.stopPublishTimer();
-    const label = document.getElementById('anim-label');
-    const timer = document.getElementById('anim-timer');
-    const detail = document.getElementById('anim-detail');
-    if (label) label.textContent = '';
-    if (timer) timer.textContent = '';
-    if (detail) detail.textContent = '';
+    ['anim-label', 'anim-timer', 'anim-detail'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.textContent = '';
+    });
   }
 
   // ========== 进度 ==========
@@ -410,9 +401,10 @@ class PopupController {
       if (retryCount !== undefined) this.timerRetry = retryCount;
       if (timeoutSeconds) this.timerTimeout = timeoutSeconds;
       if (publishStartTime) this.publishStartTime = publishStartTime;
-      this.updateTimerLabel();
       if (!this.timerInterval) {
         this.startPublishTimer(this.timerPlatform, this.timerVideoIndex, this.timerTotal, this.timerRetry, this.timerTimeout);
+      } else {
+        this.updateTimerDisplay();
       }
     }
 
@@ -454,7 +446,6 @@ class PopupController {
     this.timerTotal = this.selectedVideos.length;
     this.timerRetry = 0;
     this.timerTimeout = parseInt(document.getElementById('timeout-seconds').value) || 120;
-    this.updateTimerLabel();
     this.startPublishTimer(platformName, 0, this.selectedVideos.length, 0, this.timerTimeout);
 
     const settings = {
