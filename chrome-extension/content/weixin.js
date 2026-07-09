@@ -383,7 +383,8 @@ class WeixinPublisher {
     // ── 步骤12: 点击发布 ──
     step('点击发布...');
     if (this.aborted) return;
-    await this.clickPublish(video.name, videoIndex, totalVideos, topics, fullDescription);
+    const publishResult = await this.clickPublish(video.name, videoIndex, totalVideos, topics, fullDescription);
+    if (!publishResult || !publishResult.success) throw new Error('发布按钮点击失败');
     step('发布完成');
   }
 
@@ -603,7 +604,8 @@ class WeixinPublisher {
     }
 
     if (this.aborted) return;
-    await this.clickPublish(video.name, videoIndex, totalVideos, topics, fullDescription);
+    const publishResult2 = await this.clickPublish(video.name, videoIndex, totalVideos, topics, fullDescription);
+    if (!publishResult2 || !publishResult2.success) throw new Error('发布按钮点击失败');
   }
 
   async getVideoFile(videoPath, videoName) {
@@ -1698,14 +1700,10 @@ class WeixinPublisher {
   notifyProgress(current, total, videoName, status, topics = [], description = '') {
     try {
       chrome.runtime.sendMessage({
-        action: 'publishProgress',
-        current: current,
-        total: total,
-        videoName: videoName,
-        status: status,
-        topics: topics,
-        description: description
-      });
+        action: 'progressUpdate',
+        step: videoName, detail: status,
+        current, total, videoIndex: current - 1, status: status || 'publishing'
+      }).catch(() => {});
     } catch (e) {}
   }
 
