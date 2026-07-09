@@ -7,6 +7,7 @@ let publishState = {
 };
 
 let _doneLock = false;
+let _finishCalled = false;
 const SKIP_KEY = '_vpe_skip_names';
 const ABORT_KEY = '_vpe_abort';
 let debuggerTargets = new Map();
@@ -130,6 +131,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 function stopPublishCompletely() {
   publishState.isPublishing = false;
   _doneLock = false;
+  _finishCalled = false;
   clearPublishTimeout();
   if (publishState.nextVideoTimer) { clearTimeout(publishState.nextVideoTimer); publishState.nextVideoTimer = null; }
   if (publishState.targetTabId) {
@@ -157,6 +159,7 @@ async function handleStartPublishFlow(message) {
     totalVideos: message.videos.length,
   };
   _doneLock = false;
+  _finishCalled = false;
   await clearSkipNames();
   await clearAbortFlag();
   console.log('[BG] 开始发布，共', message.videos.length, '个');
@@ -286,6 +289,8 @@ function clearPublishTimeout() { if (publishState.timeoutTimer) { clearTimeout(p
 // ========== 完成 ==========
 
 async function finishAllPublish() {
+  if (_finishCalled) return;
+  _finishCalled = true;
   console.log('[BG] 全部完成');
   sendProgress('全部完成', 'done', 1, 1, true);
   publishState.isPublishing = false;

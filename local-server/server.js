@@ -158,7 +158,7 @@ app.get('/', (req, res) => {
     .platform-badge svg { width: 14px; height: 14px; }
     .platform-badge.douyin { background: #000; }
     .platform-badge.douyin svg { fill: #fff; }
-    .platform-badge.weixin { background: #07c160; }
+    .platform-badge.weixin { background: #E78815; }
     .platform-badge.weixin svg { fill: #fff; }
 
     .video-info { flex: 1; min-width: 0; }
