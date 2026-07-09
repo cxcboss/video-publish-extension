@@ -155,6 +155,11 @@ class PopupController {
     this.videoPath = path;
     this.updateStatus('加载中...');
     try {
+      // 先注册目录白名单
+      await fetch('http://localhost:3000/api/allow-path', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path })
+      }).catch(() => {});
       const r = await fetch(`http://localhost:3000/api/videos?path=${encodeURIComponent(path)}`);
       if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error || r.status); }
       const d = await r.json();
@@ -216,7 +221,7 @@ class PopupController {
           const vids = [...this.selectedVideos];
           const from = parseInt(this.draggedItem.dataset.index), to = parseInt(item.dataset.index);
           const [m] = vids.splice(from, 1); vids.splice(to, 0, m);
-          this.selectedVideos = vids; this.renderVideoList(vids); this.renderQueue();
+          this.selectedVideos = vids; this.videos = [...vids]; this.renderVideoList(vids); this.renderQueue();
         }
         item.classList.remove('drag-over');
         return false;

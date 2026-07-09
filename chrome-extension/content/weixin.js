@@ -1653,15 +1653,13 @@ class WeixinPublisher {
       console.log('[视频号发布助手] 找到发布按钮:', text);
       
       await this.delay(500);
-      
-      console.log('[视频号发布助手] 发布流程完成，通知background...');
-      this.notifyProgress(videoIndex + 1, totalVideos, videoName, 'done', topics, description);
-      
-      await this.delay(300);
-      
+
       btn.click();
       console.log('[视频号发布助手] 已点击发布按钮');
-      
+
+      // 通知放在点击之后，background 通过页面跳转检测真正完成
+      this.notifyProgress(videoIndex + 1, totalVideos, videoName, 'done', topics, description);
+
       return { success: true };
     }
     
