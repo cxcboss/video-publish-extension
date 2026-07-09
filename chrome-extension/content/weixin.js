@@ -72,27 +72,36 @@ class WeixinPublisher {
 
   init() {
     console.log('[视频号发布助手] 初始化中...', this.isInIframe ? '(iframe内)' : '(主页面)');
-    
+
+    this.aborted = false;
     this.setupMutationObserver();
-    
+
     chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (message.action === 'startPublish') {
+        this.aborted = false;
         this.handlePublish(message, sendResponse);
         return true;
       }
-      
+
       if (message.action === 'ping') {
         const elementCount = this.getAllElements().length;
-        sendResponse({ 
-          ready: true, 
+        sendResponse({
+          ready: true,
           isInIframe: this.isInIframe,
           elementCount: elementCount,
           url: window.location.href
         });
         return true;
       }
+
+      if (message.action === 'abortPublish') {
+        this.aborted = true;
+        console.log('[视频号发布助手] 收到中止信号');
+        sendResponse({ aborted: true });
+        return true;
+      }
     });
-    
+
     this.isReady = true;
     console.log('[视频号发布助手] 初始化完成');
   }
@@ -229,6 +238,7 @@ class WeixinPublisher {
     step('等待页面加载...');
     await this.waitForDomReady();
     await this.delay(2000);
+    if (this.aborted) return;
     step('页面加载完成');
 
     // ── 步骤2: 查找上传入口 ──
@@ -265,6 +275,7 @@ class WeixinPublisher {
     step('等待视频上传完成...');
     const uploadOk = await this.waitForUploadComplete(8);
     if (!uploadOk) step('上传检测超时，继续填写表单...');
+    if (this.aborted) return;
 
     // ── 步骤5: 获取 AI 结果 ──
     let aiContent = { topics: [], description: '' };
@@ -276,6 +287,7 @@ class WeixinPublisher {
         step(`AI 生成失败: ${e.message}`);
       }
     }
+    if (this.aborted) return;
 
     // ── 步骤6: 组装描述 + 话题 ──
     let fullDescription = '';
@@ -295,6 +307,7 @@ class WeixinPublisher {
 
     // ── 步骤7: 填写描述（带重试） ──
     step('填写描述...');
+    if (this.aborted) return;
     let descOk = await this.fillDescription(fullDescription);
     if (!descOk) {
       step('描述填写失败，重试...');
@@ -305,6 +318,7 @@ class WeixinPublisher {
 
     // ── 步骤8: 设置位置 ──
     step('设置位置...');
+    if (this.aborted) return;
     await this.setLocationNone();
 
     // ── 步骤9: 选择活动 ──
@@ -313,6 +327,7 @@ class WeixinPublisher {
       step(`选择活动: ${videoInfo.activityName}`);
       const actOk = await this.joinActivity(videoInfo.activityName);
       step(`活动选择${actOk ? '成功' : '失败'}`);
+      if (this.aborted) return;
     }
 
     // ── 步骤10: 声明原创 ──
@@ -332,10 +347,12 @@ class WeixinPublisher {
       await this.closeAllPickers();
       await this.delay(500);
       step('定时发布设置完成');
+      if (this.aborted) return;
     }
 
     // ── 步骤12: 点击发布 ──
     step('点击发布...');
+    if (this.aborted) return;
     await this.clickPublish(video.name, videoIndex, totalVideos, topics, fullDescription);
     step('发布完成');
   }
@@ -487,6 +504,7 @@ class WeixinPublisher {
     }
 
     await this.delay(12000);
+    if (this.aborted) return;
 
     let aiContent = { topics: [], description: '' };
     if (useAI && aiPromise) {
@@ -494,6 +512,7 @@ class WeixinPublisher {
         aiContent = await aiPromise;
       } catch (e) {}
     }
+    if (this.aborted) return;
 
     let fullDescription = '';
     let topics = [];
@@ -520,15 +539,18 @@ class WeixinPublisher {
     }
     
     await this.fillDescription(fullDescription);
+    if (this.aborted) return;
     await this.randomDelay();
 
     await this.setLocationNone();
+    if (this.aborted) return;
     await this.randomDelay();
 
     const videoNameHasOriginal = video.name.includes('原创');
     
     if (videoInfo.activityName && !videoNameHasOriginal) {
       await this.joinActivity(videoInfo.activityName);
+      if (this.aborted) return;
       await this.randomDelay();
     } else if (videoNameHasOriginal) {
       console.log('[视频号发布助手] 视频文件名包含"原创"，跳过活动选择');
@@ -543,12 +565,14 @@ class WeixinPublisher {
     }
 
     const firstVideoScheduled = settings.scheduledPublish === true;
-    
+
     if (firstVideoScheduled || (totalVideos > 1 && videoIndex >= 1)) {
       await this.setScheduledPublish(videoIndex, totalVideos, firstVideoScheduled);
+      if (this.aborted) return;
       await this.randomDelay();
     }
-    
+
+    if (this.aborted) return;
     await this.clickPublish(video.name, videoIndex, totalVideos, topics, fullDescription);
   }
 

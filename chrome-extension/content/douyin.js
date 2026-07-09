@@ -20,18 +20,22 @@ class DouyinPublisher {
   constructor() {
     this.isReady = false;
     this.defaultTopics = ['#动画', '#奇葩游戏', '#游戏视频', '#小游戏', '#休闲游戏'];
+    this.aborted = false;
     this.init();
   }
 
   init() {
     chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (message.action === 'startPublish') {
+        this.aborted = false;
         this.publishSingleVideo(message.videos[0], message.settings, message.videoPath, message.videoIndex, message.totalVideos)
           .then(() => {
+            if (this.aborted) return;
             this.notifyProgress('发布完成', message.videoIndex + 1, message.totalVideos, 'done');
             sendResponse({ success: true });
           })
           .catch(error => {
+            if (this.aborted) return;
             console.error('[抖音发布助手] 发布失败:', error);
             this.notifyProgress('发布失败: ' + error.message, message.videoIndex + 1, message.totalVideos, 'error');
             sendResponse({ success: false, error: error.message });
@@ -40,6 +44,12 @@ class DouyinPublisher {
       }
       if (message.action === 'ping') {
         sendResponse({ ready: true, elementCount: document.querySelectorAll('*').length });
+        return true;
+      }
+      if (message.action === 'abortPublish') {
+        this.aborted = true;
+        console.log('[抖音发布助手] 收到中止信号');
+        sendResponse({ aborted: true });
         return true;
       }
     });
@@ -54,7 +64,9 @@ class DouyinPublisher {
     // 步骤1: 等待页面加载
     this.notifyProgress('等待页面加载...', idx, totalVideos);
     await this.waitForPageReady();
+    if (this.aborted) return;
     await this.delay(1500);
+    if (this.aborted) return;
 
     // 解析文件名，提取星图任务名（格式：小游戏-xxx.mp4）
     const taskInfo = this.parseTaskFromName(video.name);
@@ -67,6 +79,7 @@ class DouyinPublisher {
     this.notifyProgress('上传视频中...', idx, totalVideos);
     const file = await this.getVideoFile(videoPath, video.name);
     if (!file) throw new Error('无法获取视频文件');
+    if (this.aborted) return;
     step(`视频大小: ${(file.size / 1024 / 1024).toFixed(1)}MB`);
 
     // DataTransfer API 注入文件到 input[type="file]（React 不拦截 file input）
@@ -86,11 +99,13 @@ class DouyinPublisher {
     this.notifyProgress('等待视频处理...', idx, totalVideos);
     const uploadOk = await this.waitForUploadComplete(8);
     if (!uploadOk) step('上传检测超时，继续填写表单...');
+    if (this.aborted) return;
 
     // 步骤3: 定时发布
     if (settings.scheduledPublish && settings.scheduleTime) {
       this.notifyProgress('设置定时发布...', idx, totalVideos);
       await this.setScheduledPublish(settings.scheduleTime);
+      if (this.aborted) return;
     }
 
     // 步骤4: 选择星图任务（文件名含"小游戏-"前缀时触发）
@@ -99,6 +114,7 @@ class DouyinPublisher {
       const taskOk = await this.selectStarTask(taskInfo.searchTerm);
       step(`星图任务${taskOk ? '选择成功' : '选择失败'}`);
       await this.delay(500);
+      if (this.aborted) return;
     }
 
     // 步骤5: 获取 AI 结果
@@ -106,6 +122,7 @@ class DouyinPublisher {
     if (settings.autoGenerate && aiPromise) {
       try { aiContent = await aiPromise; } catch (e) { step(`AI 生成失败: ${e.message}`); }
     }
+    if (this.aborted) return;
 
     // 步骤6: 填写描述
     if (settings.autoGenerate && aiContent.description) {
@@ -132,6 +149,7 @@ class DouyinPublisher {
 
     // 步骤8: 点击发布
     await this.delay(500);
+    if (this.aborted) return;
     this.notifyProgress('点击发布...', idx, totalVideos);
     const publishResult = await this.clickPublish();
     if (!publishResult) step('发布按钮点击失败');

@@ -47,24 +47,47 @@ body {
 .publish-btn:hover { opacity: 0.85; }
 .publish-btn.running { background: var(--danger); color: var(--danger-text); }
 
-/* ========== 发布中小动画 ========== */
+/* ========== 发布中状态卡片 ========== */
 .publish-animation {
-  display: flex; align-items: center; gap: 12px;
-  padding: 8px 14px; margin-bottom: 2px;
-  background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px;
+  padding: 0; margin-bottom: 2px;
+  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+  border: 1px solid rgba(99,179,237,0.2); border-radius: 10px;
   overflow: hidden;
+  animation: cardFadeIn 0.3s ease-out;
 }
 .publish-animation.hidden { display: none; }
 
-.anim-scene { position: relative; width: 120px; height: 32px; flex-shrink: 0; }
-.anim-person { position: absolute; left: 0; bottom: 2px; animation: walkBounce 0.5s ease-in-out infinite; font-size: 20px; line-height: 1; }
-.anim-box { position: absolute; right: 10px; bottom: 4px; font-size: 16px; animation: boxBob 0.5s ease-in-out infinite; }
-@keyframes walkBounce { 0%,100%{transform:translateY(0)} 25%{transform:translateY(-4px)} 50%{transform:translateY(-2px)} 75%{transform:translateY(-5px)} }
-@keyframes boxBob { 0%,100%{transform:translateY(0) rotate(0deg)} 30%{transform:translateY(-6px) rotate(-8deg)} 70%{transform:translateY(-3px) rotate(5deg)} }
-.anim-trail { position: absolute; bottom: 0; left: 24px; right: 0; height: 2px; background: repeating-linear-gradient(90deg, var(--accent) 0px, var(--accent) 4px, transparent 4px, transparent 8px); opacity: 0.5; animation: trailMove 0.8s linear infinite; }
-@keyframes trailMove { from{background-position:0 0} to{background-position:16px 0} }
-.anim-label { font-size: 12px; color: var(--text-2); white-space: nowrap; flex: 1; animation: labelPulse 2s ease-in-out infinite; }
-@keyframes labelPulse { 0%,100%{opacity:0.6} 50%{opacity:1} }
+@keyframes cardFadeIn { from{opacity:0;transform:translateY(-4px)} to{opacity:1;transform:translateY(0)} }
+
+.anim-timer-box { padding: 12px 14px; text-align: center; }
+
+.anim-timer-label {
+  font-size: 13px; font-weight: 600; color: #e2e8f0;
+  margin-bottom: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  animation: labelGlow 2s ease-in-out infinite;
+}
+@keyframes labelGlow { 0%,100%{opacity:0.8} 50%{opacity:1} }
+
+.anim-timer {
+  font-size: 28px; font-weight: 700; color: #63b3ed;
+  font-variant-numeric: tabular-nums; letter-spacing: 2px;
+  margin-bottom: 4px; min-height: 36px;
+  text-shadow: 0 0 12px rgba(99,179,237,0.3);
+}
+
+.anim-timer-detail {
+  font-size: 10px; color: rgba(226,232,240,0.5); margin-bottom: 6px;
+  font-variant-numeric: tabular-nums;
+  min-height: 14px;
+}
+
+.anim-timer-indicator { display: flex; justify-content: center; }
+.dot-pulse {
+  display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+  background: #63b3ed;
+  animation: pulseDot 1.2s ease-in-out infinite;
+}
+@keyframes pulseDot { 0%,100%{transform:scale(0.8);opacity:0.4} 50%{transform:scale(1.2);opacity:1} }
 
 /* 进度条 */
 .progress-bar { height: 3px; background: var(--border); border-radius: 2px; overflow: hidden; margin-bottom: 6px; }

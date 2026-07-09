@@ -9,6 +9,13 @@ class PopupController {
     this.draggedItem = null;
     this.videoStatuses = [];
     this.skipConfirmIndex = -1;
+    this.timerInterval = null;
+    this.publishStartTime = 0;
+    this.timerPlatform = '';
+    this.timerVideoIndex = 0;
+    this.timerTotal = 0;
+    this.timerRetry = 0;
+    this.timerTimeout = 120;
     this.init();
   }
 
@@ -315,10 +322,40 @@ class PopupController {
       btn.textContent = '发布'; btn.classList.remove('running');
       container.classList.remove('publishing-mode');
       anim.classList.add('hidden');
+      this.stopPublishTimer();
     }
   }
 
   // ========== 动画 ==========
+
+  startPublishTimer(platformName, videoIndex, total, retryCount, timeoutSec) {
+    this.stopPublishTimer();
+    this.timerPlatform = platformName || '发布中';
+    this.timerVideoIndex = videoIndex;
+    this.timerTotal = total;
+    this.timerRetry = retryCount || 0;
+    this.timerTimeout = timeoutSec || 120;
+    this.timerInterval = setInterval(() => {
+      const elapsed = Math.floor((Date.now() - this.publishStartTime) / 1000);
+      const min = Math.floor(elapsed / 60);
+      const sec = elapsed % 60;
+      const timer = document.getElementById('anim-timer');
+      const detail = document.getElementById('anim-detail');
+      if (timer) timer.textContent = `${String(min).padStart(2,'0')}:${String(sec).padStart(2,'0')}`;
+      if (detail) detail.textContent = `已用时 ${elapsed}s · 超时 ${this.timerTimeout}s${this.timerRetry ? ' · 重试 ' + this.timerRetry + '次' : ''}`;
+    }, 1000);
+  }
+
+  stopPublishTimer() {
+    if (this.timerInterval) { clearInterval(this.timerInterval); this.timerInterval = null; }
+  }
+
+  updateTimerLabel() {
+    const label = document.getElementById('anim-label');
+    const detail = document.getElementById('anim-detail');
+    if (label) label.textContent = `在${this.timerPlatform}发布第${this.timerVideoIndex + 1}个，共${this.timerTotal}个`;
+    if (detail) detail.textContent = `已用时 0s · 超时 ${this.timerTimeout}s`;
+  }
 
   updateAnimationLabel(text) {
     const label = document.getElementById('anim-label');
@@ -326,8 +363,13 @@ class PopupController {
   }
 
   hideAnimation() {
+    this.stopPublishTimer();
     const label = document.getElementById('anim-label');
+    const timer = document.getElementById('anim-timer');
+    const detail = document.getElementById('anim-detail');
     if (label) label.textContent = '';
+    if (timer) timer.textContent = '';
+    if (detail) detail.textContent = '';
   }
 
   // ========== 进度 ==========
@@ -349,7 +391,8 @@ class PopupController {
   }
 
   handleProgressUpdate(msg) {
-    const { step, detail, current, total, videoIndex, status, done } = msg;
+    const { step, detail, current, total, videoIndex, status, done,
+            platformName, totalVideos, publishStartTime, retryCount, timeoutSeconds } = msg;
     if (videoIndex !== undefined && status) this.updateQueueStatus(videoIndex, status);
 
     if (step) {
@@ -360,9 +403,18 @@ class PopupController {
       document.getElementById('progress-detail').textContent = detail || `${current} / ${total}`;
     }
 
-    // 更新动画文字
-    const curVideo = this.selectedVideos[videoIndex] || this.selectedVideos[this.selectedVideos.length - 1];
-    this.updateAnimationLabel(step || (curVideo ? `发布中：${curVideo.name}（${(videoIndex || 0) + 1}/${this.selectedVideos.length}）` : '发布中...'));
+    if (status === 'publishing' && !done) {
+      if (platformName) this.timerPlatform = platformName;
+      if (videoIndex !== undefined) this.timerVideoIndex = videoIndex;
+      if (totalVideos) this.timerTotal = totalVideos;
+      if (retryCount !== undefined) this.timerRetry = retryCount;
+      if (timeoutSeconds) this.timerTimeout = timeoutSeconds;
+      if (publishStartTime) this.publishStartTime = publishStartTime;
+      this.updateTimerLabel();
+      if (!this.timerInterval) {
+        this.startPublishTimer(this.timerPlatform, this.timerVideoIndex, this.timerTotal, this.timerRetry, this.timerTimeout);
+      }
+    }
 
     if (done) {
       setTimeout(() => {
@@ -394,7 +446,16 @@ class PopupController {
     this.videoStatuses = this.selectedVideos.map(() => 'pending');
     this.skipConfirmIndex = -1;
     this.renderQueue();
-    this.updateAnimationLabel(`准备发布 ${this.selectedVideos.length} 个视频...`);
+
+    const platformName = this.selectedPlatform === 'douyin' ? '抖音' : '视频号';
+    this.publishStartTime = Date.now();
+    this.timerPlatform = platformName;
+    this.timerVideoIndex = 0;
+    this.timerTotal = this.selectedVideos.length;
+    this.timerRetry = 0;
+    this.timerTimeout = parseInt(document.getElementById('timeout-seconds').value) || 120;
+    this.updateTimerLabel();
+    this.startPublishTimer(platformName, 0, this.selectedVideos.length, 0, this.timerTimeout);
 
     const settings = {
       autoGenerate: autoGen,

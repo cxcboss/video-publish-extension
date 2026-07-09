@@ -3,10 +3,12 @@ let publishState = {
   currentIndex: 0, targetTabId: null, platform: null, commandSent: false,
   scheduledTime: null, expectedTimestamp: null, debuggerAttached: false,
   publishRecords: [], retryCounts: {}, timeoutTimer: null, nextVideoTimer: null,
+  totalVideos: 0,
 };
 
 let _doneLock = false;
 const SKIP_KEY = '_vpe_skip_names';
+const ABORT_KEY = '_vpe_abort';
 let debuggerTargets = new Map();
 
 // ========== 跳过管理 ==========
@@ -20,6 +22,16 @@ async function getSkipNames() {
 
 async function clearSkipNames() {
   try { await chrome.storage.local.set({ [SKIP_KEY]: [] }); } catch (_) {}
+}
+
+// ========== 中止标志 ==========
+
+async function setAbortFlag() {
+  try { await chrome.storage.local.set({ [ABORT_KEY]: Date.now() }); } catch (_) {}
+}
+
+async function clearAbortFlag() {
+  try { await chrome.storage.local.set({ [ABORT_KEY]: 0 }); } catch (_) {}
 }
 
 // ========== 调试器 ==========
@@ -128,6 +140,7 @@ function stopPublishCompletely() {
   publishState.debuggerAttached = false;
   publishState.commandSent = false;
   clearSkipNames();
+  clearAbortFlag();
 }
 
 async function handleStartPublishFlow(message) {
@@ -141,9 +154,11 @@ async function handleStartPublishFlow(message) {
     platform: message.platform, commandSent: false, scheduledTime: t,
     expectedTimestamp: null, debuggerAttached: false, publishRecords: [],
     retryCounts: {}, timeoutTimer: null, nextVideoTimer: null,
+    totalVideos: message.videos.length,
   };
   _doneLock = false;
   await clearSkipNames();
+  await clearAbortFlag();
   console.log('[BG] 开始发布，共', message.videos.length, '个');
   await publishNextVideo();
 }
@@ -170,6 +185,8 @@ async function publishNextVideo() {
   }
 
   _doneLock = false;
+  publishState.publishStartTime = Date.now();
+  await clearAbortFlag();
   const video = publishState.videos[publishState.currentIndex];
   console.log('[BG] 发布:', publishState.currentIndex, video.name);
   sendProgress(`发布中: ${video.name}`, 'publishing', publishState.currentIndex, publishState.videos.length);
@@ -212,12 +229,21 @@ function startPublishTimeout() {
     const max = publishState.settings.maxRetries || 1;
     if (retries < max) {
       publishState.retryCounts[idx] = retries + 1;
-      sendProgress(`超时重试 (${retries + 1}/${max})`, 'publishing', idx, publishState.videos.length);
+      console.log(`[BG] 超时重试 (${retries + 1}/${max})`);
+      // ★ 立即中止内容脚本并关闭标签页
+      try { await chrome.tabs.sendMessage(publishState.targetTabId, { action: 'abortPublish' }); } catch (_) {}
+      await setAbortFlag();
+      await sleep(300);
       if (publishState.targetTabId) { detachDebugger(publishState.targetTabId); chrome.tabs.remove(publishState.targetTabId).catch(() => {}); publishState.targetTabId = null; }
       publishState.debuggerAttached = false; publishState.commandSent = false;
-      await sleep(3000);
+      sendProgress(`超时重试 (${retries + 1}/${max})`, 'publishing', idx, publishState.videos.length);
+      await sleep(1000);
       if (publishState.isPublishing) await publishNextVideo();
     } else {
+      console.log(`[BG] 重试${max}次仍超时，跳过`);
+      try { await chrome.tabs.sendMessage(publishState.targetTabId, { action: 'abortPublish' }); } catch (_) {}
+      await setAbortFlag();
+      await sleep(300);
       sendProgress(`重试${max}次仍超时，跳过`, 'error', idx, publishState.videos.length);
       if (publishState.targetTabId) { detachDebugger(publishState.targetTabId); chrome.tabs.remove(publishState.targetTabId).catch(() => {}); publishState.targetTabId = null; }
       publishState.currentIndex++; publishState.debuggerAttached = false; publishState.commandSent = false;
@@ -236,6 +262,7 @@ async function finishAllPublish() {
   sendProgress('全部完成', 'done', 1, 1, true);
   publishState.isPublishing = false;
   clearSkipNames();
+  clearAbortFlag();
   if (publishState.targetTabId) {
     detachDebugger(publishState.targetTabId);
     await sleep(3000);
@@ -330,7 +357,7 @@ async function sendPublishCommand(tabId) {
   try {
     await chrome.tabs.sendMessage(tabId, {
       action: 'startPublish', videos: [video], settings: publishState.settings,
-      videoPath: publishState.videoPath, videoIndex: publishState.currentIndex, totalVideos: publishState.videos.length
+      videoPath: publishState.videoPath, videoIndex: publishState.currentIndex, totalVideos: publishState.totalVideos
     });
   } catch (e) {
     console.error('[BG] 发送发布命令失败:', e.message, '等待超时重试...');
@@ -341,9 +368,14 @@ async function sendPublishCommand(tabId) {
 // ========== 进度通知 ==========
 
 function sendProgress(step, detail, current, total, done) {
+  const platformName = publishState.platform === 'douyin' ? '抖音' : '视频号';
   chrome.runtime.sendMessage({
     action: 'progressUpdate', step, detail, current, total, done: !!done,
     videoIndex: publishState.currentIndex,
+    platformName, totalVideos: publishState.totalVideos,
+    publishStartTime: publishState.publishStartTime || Date.now(),
+    retryCount: publishState.retryCounts[publishState.currentIndex] || 0,
+    timeoutSeconds: parseInt(publishState.settings?.timeoutSeconds) || 120,
     status: detail === 'done' ? 'done' : (detail === 'error' ? 'error' : (detail === 'publishing' ? 'publishing' : (detail === 'skipped' ? 'skipped' : 'pending')))
   }).catch(() => {});
 }
@@ -379,7 +411,7 @@ async function generateAIContent(videoName, settings) {
   const prompt = `你是短视频文案专家。根据以下视频内容生成发布内容。\n\n视频内容：${settings.videoContent || videoName}\n\n严格按以下JSON格式返回：\n{"description":"30字以内吸引人的文案","topics":["#话题1","#话题2","#话题3"]}\n\n注意：topics 最多5个，每个以#开头。`;
   try {
     const text = await callAIApi(settings.aiProvider, settings.aiKey, settings.aiModel, prompt);
-    if (text) { try { const m = text.match(/\{[\s\S]*\}/); if (m) { const p = JSON.parse(m[0]); return { topics: (p.topics || p.tags || []).slice(0, 5), description: p.description || p.desc || '' }; } } catch (_) {} return { topics: (text.match(/#[\u4e00-\u9fa5\w]+/g) || []).slice(0, 5), description: text.split('\n').map(l => l.trim()).filter(l => l && !l.includes('#') && l.length > 10).slice(0, 3).join(' ').substring(0, 200) }; }
+    if (text) { try { const m = text.match(/\{[\s\S]*\}/); if (m) { const p = JSON.parse(m[0]); return { topics: (p.topics || p.tags || []).slice(0, 5), description: p.description || p.desc || '' }; } } catch (_) {} return { topics: (text.match(/#[一-龥\w]+/g) || []).slice(0, 5), description: text.split('\n').map(l => l.trim()).filter(l => l && !l.includes('#') && l.length > 10).slice(0, 3).join(' ').substring(0, 200) }; }
     return { topics: [], description: '', error: 'AI返回为空' };
   } catch (error) { return { topics: [], description: '', error: error.message }; }
 }
