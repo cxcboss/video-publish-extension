@@ -6,10 +6,42 @@ const fs = require('fs');
 const app = express();
 const PORT = 3000;
 
-app.use(cors());
+// CORS 限制：只允许扩展和本地访问
+app.use(cors({
+  origin: (origin, callback) => {
+    // 允许无 origin（本地请求、扩展）和 localhost
+    if (!origin || origin.startsWith('chrome-extension://') || origin.startsWith('http://localhost')) {
+      callback(null, true);
+    } else {
+      callback(null, false);
+    }
+  }
+}));
 app.use(express.json());
 
+// 路径白名单：只允许访问用户通过扩展添加的目录
+const allowedPaths = new Set();
+
+function addAllowedPath(dirPath) {
+  try {
+    allowedPaths.add(path.resolve(dirPath));
+  } catch (_) {}
+}
+
+function isPathAllowed(filePath) {
+  const resolved = path.resolve(filePath);
+  for (const allowed of allowedPaths) {
+    if (resolved === allowed || resolved.startsWith(allowed + path.sep)) return true;
+  }
+  return false;
+}
+
 const VIDEO_EXTENSIONS = ['.mp4', '.mov', '.avi', '.mkv', '.flv', '.wmv', '.webm'];
+const VIDEO_MIME_TYPES = {
+  '.mp4': 'video/mp4', '.mov': 'video/quicktime', '.avi': 'video/x-msvideo',
+  '.mkv': 'video/x-matroska', '.flv': 'video/x-flv', '.wmv': 'video/x-ms-wmv',
+  '.webm': 'video/webm'
+};
 const HISTORY_FILE = path.join(__dirname, 'publish_history.json');
 
 function loadHistory() {
@@ -34,7 +66,7 @@ function saveHistory(history) {
 
 function escapeHtml(text) {
   if (!text) return '';
-  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 function formatDate(dateStr) {
@@ -426,13 +458,18 @@ app.delete('/api/publish-record/:id', (req, res) => {
 
 app.get('/api/videos', (req, res) => {
   const dirPath = req.query.path;
-  
+
   if (!dirPath) {
     return res.status(400).json({ error: '请提供视频目录路径' });
   }
 
-  if (!fs.existsSync(dirPath)) {
+  const resolved = path.resolve(dirPath);
+  if (!fs.existsSync(resolved)) {
     return res.status(404).json({ error: '目录不存在' });
+  }
+
+  if (!isPathAllowed(resolved)) {
+    return res.status(403).json({ error: '目录未授权，请先通过扩展浏览该目录' });
   }
 
   try {
@@ -462,13 +499,18 @@ app.get('/api/videos', (req, res) => {
 
 app.get('/api/video/file', (req, res) => {
   const filePath = req.query.path;
-  
+
   if (!filePath) {
     return res.status(400).json({ error: '请提供视频文件路径' });
   }
 
-  if (!fs.existsSync(filePath)) {
+  const resolved = path.resolve(filePath);
+  if (!fs.existsSync(resolved)) {
     return res.status(404).json({ error: '文件不存在' });
+  }
+
+  if (!isPathAllowed(resolved)) {
+    return res.status(403).json({ error: '文件路径未授权' });
   }
 
   const ext = path.extname(filePath).toLowerCase();
@@ -476,44 +518,50 @@ app.get('/api/video/file', (req, res) => {
     return res.status(400).json({ error: '不支持的文件格式' });
   }
 
-  const stat = fs.statSync(filePath);
+  const stat = fs.statSync(resolved);
   const fileSize = stat.size;
   const range = req.headers.range;
+  const contentType = VIDEO_MIME_TYPES[ext] || 'video/mp4';
 
   if (range) {
     const parts = range.replace(/bytes=/, '').split('-');
     const start = parseInt(parts[0], 10);
     const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
     const chunksize = (end - start) + 1;
-    const file = fs.createReadStream(filePath, { start, end });
+    const file = fs.createReadStream(resolved, { start, end });
 
     res.writeHead(206, {
       'Content-Range': `bytes ${start}-${end}/${fileSize}`,
       'Accept-Ranges': 'bytes',
       'Content-Length': chunksize,
-      'Content-Type': 'video/mp4'
+      'Content-Type': contentType
     });
 
     file.pipe(res);
   } else {
     res.writeHead(200, {
       'Content-Length': fileSize,
-      'Content-Type': 'video/mp4'
+      'Content-Type': contentType
     });
 
-    fs.createReadStream(filePath).pipe(res);
+    fs.createReadStream(resolved).pipe(res);
   }
 });
 
 app.get('/api/video/info', (req, res) => {
   const filePath = req.query.path;
-  
+
   if (!filePath) {
     return res.status(400).json({ error: '请提供视频文件路径' });
   }
 
-  if (!fs.existsSync(filePath)) {
+  const resolved = path.resolve(filePath);
+  if (!fs.existsSync(resolved)) {
     return res.status(404).json({ error: '文件不存在' });
+  }
+
+  if (!isPathAllowed(resolved)) {
+    return res.status(403).json({ error: '文件路径未授权' });
   }
 
   try {
@@ -535,21 +583,30 @@ app.get('/api/video/info', (req, res) => {
 
 app.get('/api/directories', (req, res) => {
   const basePath = req.query.path || process.env.HOME;
-  
+  const resolved = path.resolve(basePath);
+
   try {
-    const items = fs.readdirSync(basePath, { withFileTypes: true });
+    const items = fs.readdirSync(resolved, { withFileTypes: true });
     const directories = items
       .filter(item => item.isDirectory())
       .map(item => ({
         name: item.name,
-        path: path.join(basePath, item.name)
+        path: path.join(resolved, item.name)
       }))
       .sort((a, b) => a.name.localeCompare(b.name));
 
-    res.json({ directories, currentPath: basePath });
+    res.json({ directories, currentPath: resolved });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
+});
+
+// 注册允许访问的目录（用户通过扩展浏览时调用）
+app.post('/api/allow-path', (req, res) => {
+  const dirPath = req.body.path;
+  if (!dirPath) return res.status(400).json({ error: '请提供目录路径' });
+  addAllowedPath(dirPath);
+  res.json({ success: true, allowed: path.resolve(dirPath) });
 });
 
 app.get('/health', (req, res) => {
@@ -643,8 +700,12 @@ function compareVersions(a, b) {
   return 0;
 }
 
-// 执行更新 - git pull
+// 执行更新 - git pull（仅允许本地请求）
 app.post('/update', (req, res) => {
+  const origin = req.headers.origin || '';
+  if (origin && !origin.startsWith('http://localhost')) {
+    return res.status(403).json({ success: false, error: '禁止远程更新' });
+  }
   const { exec } = require('child_process');
   const projectDir = path.join(__dirname, '..');
 
