@@ -178,9 +178,12 @@ class DouyinPublisher {
     if (this.aborted) return;
     this.notifyProgress('点击发布...', idx, totalVideos);
     const publishResult = await this.clickPublish();
-    if (!publishResult) step('发布按钮点击失败');
+    if (!publishResult) {
+      step('发布按钮点击失败');
+      throw new Error('发布按钮点击失败');
+    }
 
-    // 步骤9: 通知 background 保存发布记录
+    // 步骤9: 通知 background 保存发布记录（仅在点击成功后）
     await this.delay(3000);
     chrome.runtime.sendMessage({
       action: 'douyinPublishDone',

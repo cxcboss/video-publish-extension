@@ -1657,8 +1657,8 @@ class WeixinPublisher {
       btn.click();
       console.log('[视频号发布助手] 已点击发布按钮');
 
-      // 通知放在点击之后，background 通过页面跳转检测真正完成
-      this.notifyProgress(videoIndex + 1, totalVideos, videoName, 'done', topics, description);
+      // 不发送 done 通知！background 通过页面跳转到 /post/list 检测真正完成
+      // 超时保护由 background 的 timeout 机制负责
 
       return { success: true };
     }
