@@ -154,6 +154,7 @@ async function handleStartPublishFlow(message) {
     isPublishing: true, videos: message.videos, settings: message.settings,
     videoPath: message.videoPath, currentIndex: 0, targetTabId: null,
     platform: message.platform, commandSent: false, scheduledTime: t,
+    _originalScheduledTime: t,  // 保存原始定时时间，不被覆盖
     expectedTimestamp: null, debuggerAttached: false, publishRecords: [],
     retryCounts: {}, timeoutTimer: null, nextVideoTimer: null,
     totalVideos: message.videos.length,
@@ -453,12 +454,12 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 function calculateScheduledTime(videoIndex, firstVideoScheduled = false) {
   let baseTime;
-  if (videoIndex === 0 && publishState.scheduledTime) baseTime = new Date(publishState.scheduledTime);
-  else if (publishState.scheduledTime) { baseTime = new Date(publishState.scheduledTime); baseTime.setMinutes(baseTime.getMinutes() + 40 + Math.floor(Math.random() * 49)); }
+  const baseStr = publishState._originalScheduledTime || publishState.scheduledTime;
+  if (videoIndex === 0 && baseStr) baseTime = new Date(baseStr);
+  else if (baseStr) { baseTime = new Date(baseStr); baseTime.setMinutes(baseTime.getMinutes() + 40 + Math.floor(Math.random() * 49)); }
   else { baseTime = new Date(); if (firstVideoScheduled) baseTime.setMinutes(baseTime.getMinutes() + 5 + Math.floor(Math.random() * 10)); if (videoIndex > 0) baseTime.setMinutes(baseTime.getMinutes() + 40 + Math.floor(Math.random() * 49)); }
   const p = v => String(v).padStart(2, '0');
   const timeStr = `${baseTime.getFullYear()}-${p(baseTime.getMonth()+1)}-${p(baseTime.getDate())} ${p(baseTime.getHours())}:${p(baseTime.getMinutes())}`;
-  publishState.scheduledTime = baseTime.toISOString();
   return timeStr;
 }
 

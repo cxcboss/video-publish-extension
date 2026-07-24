@@ -130,7 +130,13 @@ class DouyinPublisher {
     // 步骤3: 定时发布
     if (settings.scheduledPublish && settings.scheduleTime) {
       this.notifyProgress('设置定时发布...', idx, totalVideos);
-      await this.setScheduledPublish(settings.scheduleTime);
+      // 保存原始定时时间用于 fallback
+      if (!this._originalScheduleTime) {
+        this._originalScheduleTime = settings.scheduleTime.replace('T', ' ');
+      }
+      // 从 background 获取计算后的定时时间（每个视频间隔40-88分钟）
+      const scheduledTime = await this.getScheduledTime(idx, totalVideos);
+      await this.setScheduledPublish(scheduledTime);
       if (this.aborted) return;
     }
 
@@ -498,6 +504,27 @@ class DouyinPublisher {
       break;
     }
     return true;
+  }
+
+  /**
+   * 从 background 获取计算后的定时时间
+   * 每个视频会有不同的定时时间（间隔40-88分钟）
+   */
+  async getScheduledTime(videoIndex, firstVideoScheduled = false) {
+    return new Promise((resolve) => {
+      chrome.runtime.sendMessage({
+        action: 'getScheduledTime',
+        videoIndex: videoIndex,
+        firstVideoScheduled: firstVideoScheduled
+      }, (response) => {
+        if (chrome.runtime.lastError) {
+          // fallback: 使用原始时间
+          resolve(this._originalScheduleTime || new Date().toISOString().replace('T', ' ').substring(0, 16));
+        } else {
+          resolve(response.scheduledTime);
+        }
+      });
+    });
   }
 
   // ===== 星图任务 =====

@@ -1027,7 +1027,12 @@ class WeixinPublisher {
   async setScheduledPublish(videoIndex, totalVideos, firstVideoScheduled = false) {
     const scheduledTime = await this.getScheduledTime(videoIndex, firstVideoScheduled);
     console.log('[视频号发布助手] 计划发布时间:', scheduledTime);
-    
+
+    // 保存原始定时时间用于 fallback 计算
+    if (videoIndex === 0 && scheduledTime) {
+      this._originalScheduledTime = scheduledTime;
+    }
+
     const timeMatch = scheduledTime.match(/(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2})/);
     if (!timeMatch) {
       return false;
@@ -1380,28 +1385,26 @@ class WeixinPublisher {
   }
 
   calculateScheduledTime(videoIndex, firstVideoScheduled = false) {
-    const now = new Date();
+    // 优先使用用户设定的原始时间，而非当前时间
+    const baseStr = this._originalScheduledTime || null;
+    const now = baseStr ? new Date(baseStr.replace(/-/g, '/')) : new Date();
     let totalMinutes = 0;
-    
+
     if (firstVideoScheduled && videoIndex === 0) {
       return this.formatTimeForDisplay(now);
     }
-    
-    if (firstVideoScheduled) {
-      totalMinutes = 5 + Math.floor(Math.random() * 10);
-      for (let i = 1; i <= videoIndex; i++) {
-        const randomMinutes = 40 + Math.floor(Math.random() * 49);
-        totalMinutes += randomMinutes;
-      }
-    } else {
-      for (let i = 1; i <= videoIndex; i++) {
-        const randomMinutes = 40 + Math.floor(Math.random() * 49);
-        totalMinutes += randomMinutes;
-      }
+
+    // 从原始时间计算偏移，每个视频独立计算
+    for (let i = 0; i < videoIndex; i++) {
+      const randomMinutes = 40 + Math.floor(Math.random() * 49);
+      totalMinutes += randomMinutes;
     }
-    
+    if (firstVideoScheduled && videoIndex > 0) {
+      totalMinutes += 5 + Math.floor(Math.random() * 10);
+    }
+
     const scheduledDate = new Date(now.getTime() + totalMinutes * 60 * 1000);
-    
+
     return this.formatTimeForDisplay(scheduledDate);
   }
 
