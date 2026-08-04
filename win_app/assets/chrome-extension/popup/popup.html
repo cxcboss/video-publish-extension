@@ -7,7 +7,7 @@
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
-  <div class="container">
+  <div class="container" id="app-container">
 
     <!-- 顶部状态栏 + 发布按钮 -->
     <div class="topbar">
@@ -16,7 +16,17 @@
         <span class="status-text" id="status-text">检测中...</span>
       </div>
       <button id="publish-btn" class="publish-btn">发布</button>
-      <span class="version" id="version-text">v2.5.2</span>
+      <!-- #19: 版本号由 popup.js 从 manifest 动态读取 -->
+      <span class="version" id="version-text"></span>
+    </div>
+
+    <!-- 发布中状态 -->
+    <div id="publish-animation" class="publish-animation hidden">
+      <div class="anim-timer-box">
+        <div class="anim-timer-label" id="anim-label">发布中...</div>
+        <div class="anim-timer" id="anim-timer"></div>
+        <div class="anim-timer-detail" id="anim-detail"></div>
+      </div>
     </div>
 
     <!-- 发布进度 -->
@@ -29,19 +39,21 @@
     </div>
 
     <!-- 平台选择 -->
-    <div class="section compact">
+    <div class="section compact section-controls">
       <div class="platform-row">
-        <button id="douyin-btn" class="platform-btn">
-          <span>♪</span> 抖音
-        </button>
-        <button id="weixin-btn" class="platform-btn">
-          <span>◈</span> 视频号
-        </button>
+        <div class="platform-group">
+          <button id="douyin-btn" class="platform-btn"><span>♪</span> 抖音</button>
+          <button class="open-link-btn" id="open-douyin" title="打开抖音创作者中心">↗</button>
+        </div>
+        <div class="platform-group">
+          <button id="weixin-btn" class="platform-btn"><span>◈</span> 视频号</button>
+          <button class="open-link-btn" id="open-weixin" title="打开视频号创作平台">↗</button>
+        </div>
       </div>
     </div>
 
     <!-- 定时发布 -->
-    <div class="section compact">
+    <div class="section compact section-controls">
       <div class="row-between">
         <label class="toggle-label">
           <input type="checkbox" id="scheduled-publish">
@@ -56,23 +68,32 @@
     </div>
 
     <!-- 自动重试 -->
-    <div class="section compact">
+    <div class="section compact section-controls">
       <div class="row-between">
         <label class="toggle-label">
-          <input type="checkbox" id="auto-retry">
+          <input type="checkbox" id="auto-retry" checked>
           <span class="toggle-switch"></span>
           <span>超时自动重试</span>
         </label>
-        <div id="retry-count-wrap" class="inline-input hidden">
-          <label class="small-label">次数</label>
-          <input type="number" id="max-retries" min="1" max="10" value="1" class="small-input">
+      </div>
+      <div id="retry-options" class="hidden" style="margin-top:6px">
+        <div class="row-between">
+          <span class="hint" style="flex:1">单个视频超时时自动重试</span>
+          <div class="inline-input">
+            <label class="small-label">超时</label>
+            <input type="number" id="timeout-seconds" min="30" max="600" value="120" class="small-input" style="width:52px">
+            <label class="small-label">秒</label>
+          </div>
+          <div class="inline-input" style="margin-left:8px">
+            <label class="small-label">次数</label>
+            <input type="number" id="max-retries" min="1" max="10" value="1" class="small-input">
+          </div>
         </div>
       </div>
-      <div class="hint">单个视频任务超时30秒时自动重试</div>
     </div>
 
-    <!-- AI 生成（含 AI 配置折叠区） -->
-    <div class="section compact">
+    <!-- AI 生成 -->
+    <div class="section compact section-controls">
       <div class="row-between clickable" id="auto-generate-row">
         <label class="toggle-label" onclick="event.stopPropagation()">
           <input type="checkbox" id="auto-generate">
@@ -81,7 +102,6 @@
         </label>
         <span class="arrow" id="ai-arrow" title="AI 配置">▸</span>
       </div>
-      <!-- AI 配置：点击箭头展开 -->
       <div id="ai-config-wrap" class="hidden">
         <div class="form-row" style="margin-top:8px">
           <label>Provider</label>
@@ -94,25 +114,18 @@
             <option value="deepseek">DeepSeek</option>
           </select>
         </div>
-        <div class="form-row">
-          <label>API Key</label>
-          <input type="password" id="ai-key" placeholder="sk-...">
-        </div>
-        <div class="form-row">
-          <label>Model</label>
-          <input type="text" id="ai-model" placeholder="可选，留空用默认">
-        </div>
+        <div class="form-row"><label>API Key</label><input type="password" id="ai-key" placeholder="sk-..."></div>
+        <div class="form-row"><label>Model</label><input type="text" id="ai-model" placeholder="可选，留空用默认"></div>
         <button id="test-ai-btn" class="test-btn">测试连接</button>
         <div id="test-result" class="test-result hidden"></div>
       </div>
-      <!-- 视频内容描述 -->
       <div id="video-content-wrap" class="hidden">
         <textarea id="video-content" placeholder="描述视频内容，AI 根据此内容生成话题标签（最多5个）和描述文案"></textarea>
       </div>
     </div>
 
     <!-- 视频目录 -->
-    <div class="section compact">
+    <div class="section compact section-controls">
       <div class="path-row">
         <input type="text" id="video-path" placeholder="视频目录路径 /Users/xxx/Videos">
         <button id="refresh-btn" class="path-btn refresh" title="刷新列表">↻</button>
@@ -130,14 +143,13 @@
       <div id="publish-queue" class="publish-queue"></div>
     </div>
 
-    <!-- 服务启动提示（未连接时显示） -->
+    <!-- 服务启动提示 -->
     <div id="server-hint" class="server-hint hidden">
       <div class="server-hint-title">本地服务未启动</div>
       <code id="server-cmd">cd local-server && node server.js</code>
     </div>
 
   </div>
-
   <script src="popup.js"></script>
 </body>
 </html>

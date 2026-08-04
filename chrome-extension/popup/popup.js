@@ -25,6 +25,9 @@ class PopupController {
     this.checkServerStatus();
     this.pollPublishState();
     this.listenProgress();
+    // #19: 版本号从 manifest 动态读取，避免与 manifest 不同步
+    const manifest = chrome.runtime.getManifest();
+    if (manifest?.version) document.getElementById('version-text').textContent = 'v' + manifest.version;
   }
 
   // ========== 事件绑定 ==========
@@ -192,13 +195,18 @@ class PopupController {
     this.renderQueue();
   }
 
+  // #6: 转义用户可控文本（视频文件名），防止 HTML 注入
+  escapeHtml(s) {
+    return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+
   renderVideoList(videos) {
     const c = document.getElementById('video-list');
     c.innerHTML = videos.map((v, i) => `
       <div class="video-item" data-index="${i}" draggable="true">
         <input type="checkbox" id="v-${i}" checked>
         <span class="idx">${i+1}</span>
-        <span class="name" title="${v.name}">${v.name}</span>
+        <span class="name" title="${this.escapeHtml(v.name)}">${this.escapeHtml(v.name)}</span>
         <span class="size">${this.fmtSize(v.size)}</span>
       </div>
     `).join('');
@@ -213,10 +221,15 @@ class PopupController {
       item.addEventListener('drop', (e) => {
         e.stopPropagation();
         if (item !== this.draggedItem) {
-          const vids = [...this.selectedVideos];
+          // #5: 重排 this.videos（而非仅 selectedVideos），保持 checkbox id 映射一致，
+          // 否则后续 syncSelected 会把排序还原
+          const vids = [...this.videos];
           const from = parseInt(this.draggedItem.dataset.index), to = parseInt(item.dataset.index);
           const [m] = vids.splice(from, 1); vids.splice(to, 0, m);
-          this.selectedVideos = vids; this.renderVideoList(vids); this.renderQueue();
+          this.videos = vids;
+          this.selectedVideos = [...vids];
+          this.renderVideoList(vids);
+          this.renderQueue();
         }
         item.classList.remove('drag-over');
         return false;
@@ -244,7 +257,7 @@ class PopupController {
       const showConfirm = this.isPublishing && this.skipConfirmIndex === i;
       return `<div class="queue-item${isSkipped ? ' skipped' : ''}" data-index="${i}">
         <span class="dot ${status}"></span>
-        <span class="queue-name">${i+1}. ${v.name}</span>
+        <span class="queue-name">${i+1}. ${this.escapeHtml(v.name)}</span>
         ${isSkipped ? '<span class="queue-status">已跳过</span>' : ''}
         ${showConfirm ? `<span class="skip-inline">
           <button class="skip-yes" data-skip="${i}">跳过</button>

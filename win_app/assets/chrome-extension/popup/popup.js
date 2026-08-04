@@ -1,14 +1,3 @@
-/**
- * AI 视频发布助手 - Popup 控制器
- *
- * 负责：
- * 1. UI 交互（平台选择、开关、目录浏览）
- * 2. 设置持久化（chrome.storage.local）
- * 3. 发布流程触发（通过 background.js）
- * 4. 进度监控（轮询 + 消息监听）
- * 5. AI 连接测试
- * 6. 服务状态检测 + 启动提示
- */
 class PopupController {
   constructor() {
     this.selectedPlatform = null;
@@ -18,6 +7,15 @@ class PopupController {
     this.videos = [];
     this.loadTimeout = null;
     this.draggedItem = null;
+    this.videoStatuses = [];
+    this.skipConfirmIndex = -1;
+    this.timerInterval = null;
+    this.publishStartTime = 0;
+    this.timerPlatform = '';
+    this.timerVideoIndex = 0;
+    this.timerTotal = 0;
+    this.timerRetry = 0;
+    this.timerTimeout = 120;
     this.init();
   }
 
@@ -27,131 +25,93 @@ class PopupController {
     this.checkServerStatus();
     this.pollPublishState();
     this.listenProgress();
+    // #19: 版本号从 manifest 动态读取，避免与 manifest 不同步
+    const manifest = chrome.runtime.getManifest();
+    if (manifest?.version) document.getElementById('version-text').textContent = 'v' + manifest.version;
   }
 
-  // ==================== 事件绑定 ====================
+  // ========== 事件绑定 ==========
 
   bindEvents() {
-    // 平台选择
     document.getElementById('douyin-btn').addEventListener('click', () => this.selectPlatform('douyin'));
     document.getElementById('weixin-btn').addEventListener('click', () => this.selectPlatform('weixin'));
-
-    // 视频目录
+    document.getElementById('open-douyin').addEventListener('click', () => chrome.tabs.create({ url: 'https://creator.douyin.com/creator-micro/home' }));
+    document.getElementById('open-weixin').addEventListener('click', () => chrome.tabs.create({ url: 'https://channels.weixin.qq.com/platform' }));
     document.getElementById('browse-btn').addEventListener('click', () => this.showDirBrowser());
-    document.getElementById('refresh-btn').addEventListener('click', () => {
-      if (this.videoPath) this.loadVideos(this.videoPath);
-    });
-
-    // 发布按钮
+    document.getElementById('refresh-btn').addEventListener('click', () => { if (this.videoPath) this.loadVideos(this.videoPath); });
     document.getElementById('publish-btn').addEventListener('click', () => this.togglePublish());
 
-    // 定时发布开关
     document.getElementById('scheduled-publish').addEventListener('change', (e) => {
       document.getElementById('schedule-time-wrap').classList.toggle('hidden', !e.target.checked);
       this.updateScheduleHint();
     });
-
-    // AI 生成开关
     document.getElementById('auto-generate').addEventListener('change', (e) => {
       document.getElementById('video-content-wrap').classList.toggle('hidden', !e.target.checked);
     });
-
-    // 自动重试开关
     document.getElementById('auto-retry').addEventListener('change', (e) => {
-      document.getElementById('retry-count-wrap').classList.toggle('hidden', !e.target.checked);
+      document.getElementById('retry-options').classList.toggle('hidden', !e.target.checked);
     });
-
-    // AI 配置折叠 - 整行可点击（label 内的点击除外，避免 toggle 冲突）
     document.getElementById('auto-generate-row').addEventListener('click', () => {
-      const body = document.getElementById('ai-config-wrap');
-      const arrow = document.getElementById('ai-arrow');
-      body.classList.toggle('hidden');
-      arrow.classList.toggle('open');
+      document.getElementById('ai-config-wrap').classList.toggle('hidden');
+      document.getElementById('ai-arrow').classList.toggle('open');
     });
-
-    // AI 测试按钮
     document.getElementById('test-ai-btn').addEventListener('click', () => this.testAI());
 
-    // 路径输入（延迟加载）
     const pathInput = document.getElementById('video-path');
     pathInput.addEventListener('input', (e) => {
       this.videoPath = e.target.value;
       if (this.loadTimeout) clearTimeout(this.loadTimeout);
-      this.loadTimeout = setTimeout(() => {
-        if (e.target.value.trim()) this.loadVideos(e.target.value.trim());
-      }, 600);
+      this.loadTimeout = setTimeout(() => { if (e.target.value.trim()) this.loadVideos(e.target.value.trim()); }, 600);
     });
     pathInput.addEventListener('keypress', (e) => {
-      if (e.key === 'Enter') {
-        if (this.loadTimeout) clearTimeout(this.loadTimeout);
-        this.loadVideos(e.target.value);
-      }
+      if (e.key === 'Enter') { if (this.loadTimeout) clearTimeout(this.loadTimeout); this.loadVideos(e.target.value); }
     });
   }
 
-  // ==================== 服务状态 ====================
+  // ========== 服务状态 ==========
 
   async checkServerStatus() {
     const dot = document.getElementById('status-dot');
     const text = document.getElementById('status-text');
     const hint = document.getElementById('server-hint');
-
     try {
       const r = await fetch('http://localhost:3000/health');
-      if (r.ok) {
-        dot.className = 'status-dot on';
-        text.textContent = '服务已连接';
-        hint.classList.add('hidden');
-        return;
-      }
+      if (r.ok) { dot.className = 'status-dot on'; text.textContent = '服务已连接'; hint.classList.add('hidden'); return; }
     } catch (_) {}
-
-    dot.className = 'status-dot off';
-    text.textContent = '服务未启动';
-    hint.classList.remove('hidden');
+    dot.className = 'status-dot off'; text.textContent = '服务未启动'; hint.classList.remove('hidden');
   }
 
-  // ==================== 设置管理 ====================
+  // ========== 设置管理 ==========
 
   async loadSettings() {
     try {
       const r = await chrome.storage.local.get([
         'videoPath', 'aiProvider', 'aiKey', 'aiModel',
         'autoGenerate', 'videoContent', 'scheduledPublish', 'scheduleTime',
-        'autoRetry', 'maxRetries'
+        'autoRetry', 'maxRetries', 'timeoutSeconds'
       ]);
-      if (r.videoPath) {
-        document.getElementById('video-path').value = r.videoPath;
-        this.videoPath = r.videoPath;
-        this.loadVideos(r.videoPath);
-      }
+      if (r.videoPath) { document.getElementById('video-path').value = r.videoPath; this.videoPath = r.videoPath; this.loadVideos(r.videoPath); }
       if (r.aiProvider) document.getElementById('ai-provider').value = r.aiProvider;
       if (r.aiKey) document.getElementById('ai-key').value = r.aiKey;
       if (r.aiModel) document.getElementById('ai-model').value = r.aiModel;
-      if (r.autoGenerate) {
-        document.getElementById('auto-generate').checked = true;
-        document.getElementById('video-content-wrap').classList.remove('hidden');
-      }
+      if (r.autoGenerate) { document.getElementById('auto-generate').checked = true; document.getElementById('video-content-wrap').classList.remove('hidden'); }
       if (r.videoContent) document.getElementById('video-content').value = r.videoContent;
-      if (r.scheduledPublish) {
-        document.getElementById('scheduled-publish').checked = true;
-        document.getElementById('schedule-time-wrap').classList.remove('hidden');
-      }
+      if (r.scheduledPublish) { document.getElementById('scheduled-publish').checked = true; document.getElementById('schedule-time-wrap').classList.remove('hidden'); }
       if (r.scheduleTime) document.getElementById('schedule-time').value = r.scheduleTime;
       else this.setDefaultScheduleTime();
-      if (r.autoRetry) {
-        document.getElementById('auto-retry').checked = true;
-        document.getElementById('retry-count-wrap').classList.remove('hidden');
-      }
+      if (r.autoRetry !== undefined) document.getElementById('auto-retry').checked = r.autoRetry;
+      else document.getElementById('auto-retry').checked = true; // 默认开启
       if (r.maxRetries) document.getElementById('max-retries').value = r.maxRetries;
+      if (r.timeoutSeconds) document.getElementById('timeout-seconds').value = r.timeoutSeconds;
+      // 根据 auto-retry 状态显示/隐藏选项
+      document.getElementById('retry-options').classList.toggle('hidden', !document.getElementById('auto-retry').checked);
     } catch (e) { console.error(e); }
   }
 
   setDefaultScheduleTime() {
     const n = new Date(); n.setMinutes(n.getMinutes() + 10);
     const p = v => String(v).padStart(2, '0');
-    document.getElementById('schedule-time').value =
-      `${n.getFullYear()}-${p(n.getMonth()+1)}-${p(n.getDate())}T${p(n.getHours())}:${p(n.getMinutes())}`;
+    document.getElementById('schedule-time').value = `${n.getFullYear()}-${p(n.getMonth()+1)}-${p(n.getDate())}T${p(n.getHours())}:${p(n.getMinutes())}`;
   }
 
   async saveSettings() {
@@ -166,7 +126,8 @@ class PopupController {
         scheduledPublish: document.getElementById('scheduled-publish').checked,
         scheduleTime: document.getElementById('schedule-time').value,
         autoRetry: document.getElementById('auto-retry').checked,
-        maxRetries: parseInt(document.getElementById('max-retries').value) || 1
+        maxRetries: parseInt(document.getElementById('max-retries').value) || 1,
+        timeoutSeconds: parseInt(document.getElementById('timeout-seconds').value) || 120
       });
     } catch (e) { console.error(e); }
   }
@@ -179,7 +140,7 @@ class PopupController {
       : '抖音：调用平台原生定时发布';
   }
 
-  // ==================== 平台选择 ====================
+  // ========== 平台选择 ==========
 
   selectPlatform(p) {
     this.selectedPlatform = p;
@@ -189,7 +150,7 @@ class PopupController {
     this.updateScheduleHint();
   }
 
-  // ==================== 视频目录 ====================
+  // ========== 视频目录 ==========
 
   async loadVideos(path) {
     if (!path?.trim()) { this.updateStatus('请输入目录路径'); return; }
@@ -201,11 +162,12 @@ class PopupController {
       if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error || r.status); }
       const d = await r.json();
       if (d.videos?.length > 0) {
-        this.videos = d.videos;
-        this.selectedVideos = [...d.videos];
-        this.renderVideoList(d.videos);
+        const sorted = this.sortVideosByNumber(d.videos);
+        this.videos = sorted;
+        this.selectedVideos = [...sorted];
+        this.renderVideoList(sorted);
         this.renderQueue();
-        this.updateStatus(`已加载 ${d.videos.length} 个视频`);
+        this.updateStatus(`已加载 ${sorted.length} 个视频`);
       } else {
         this.updateStatus(d.error || '未找到视频');
         this.clearList();
@@ -216,11 +178,26 @@ class PopupController {
     }
   }
 
+  sortVideosByNumber(videos) {
+    if (!videos || videos.length === 0) return videos;
+    const hasNum = v => /^\d+/.test(v.name);
+    if (videos.every(hasNum)) return [...videos].sort((a, b) => parseInt(a.name.match(/^(\d+)/)[1]) - parseInt(b.name.match(/^(\d+)/)[1]));
+    const withNum = [], withoutNum = [];
+    videos.forEach(v => (hasNum(v) ? withNum : withoutNum).push(v));
+    withNum.sort((a, b) => parseInt(a.name.match(/^(\d+)/)[1]) - parseInt(b.name.match(/^(\d+)/)[1]));
+    return [...withNum, ...withoutNum];
+  }
+
   clearList() {
     document.getElementById('video-list').innerHTML = '';
     this.videos = [];
     this.selectedVideos = [];
     this.renderQueue();
+  }
+
+  // #6: 转义用户可控文本（视频文件名），防止 HTML 注入
+  escapeHtml(s) {
+    return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
 
   renderVideoList(videos) {
@@ -229,16 +206,12 @@ class PopupController {
       <div class="video-item" data-index="${i}" draggable="true">
         <input type="checkbox" id="v-${i}" checked>
         <span class="idx">${i+1}</span>
-        <span class="name" title="${v.name}">${v.name}</span>
+        <span class="name" title="${this.escapeHtml(v.name)}">${this.escapeHtml(v.name)}</span>
         <span class="size">${this.fmtSize(v.size)}</span>
       </div>
     `).join('');
-
     c.querySelectorAll('.video-item').forEach(item => {
-      item.addEventListener('click', (e) => {
-        if (e.target.tagName !== 'INPUT') item.querySelector('input').checked = !item.querySelector('input').checked;
-        this.syncSelected();
-      });
+      item.addEventListener('click', (e) => { if (e.target.tagName !== 'INPUT') item.querySelector('input').checked = !item.querySelector('input').checked; this.syncSelected(); });
       item.querySelector('input').addEventListener('change', () => this.syncSelected());
       item.addEventListener('dragstart', () => { this.draggedItem = item; item.classList.add('dragging'); });
       item.addEventListener('dragend', () => { item.classList.remove('dragging'); this.draggedItem = null; c.querySelectorAll('.video-item').forEach(i => i.classList.remove('drag-over')); });
@@ -248,12 +221,13 @@ class PopupController {
       item.addEventListener('drop', (e) => {
         e.stopPropagation();
         if (item !== this.draggedItem) {
-          const vids = [...this.selectedVideos];
-          const from = parseInt(this.draggedItem.dataset.index);
-          const to = parseInt(item.dataset.index);
-          const [m] = vids.splice(from, 1);
-          vids.splice(to, 0, m);
-          this.selectedVideos = vids;
+          // #5: 重排 this.videos（而非仅 selectedVideos），保持 checkbox id 映射一致，
+          // 否则后续 syncSelected 会把排序还原
+          const vids = [...this.videos];
+          const from = parseInt(this.draggedItem.dataset.index), to = parseInt(item.dataset.index);
+          const [m] = vids.splice(from, 1); vids.splice(to, 0, m);
+          this.videos = vids;
+          this.selectedVideos = [...vids];
           this.renderVideoList(vids);
           this.renderQueue();
         }
@@ -265,10 +239,7 @@ class PopupController {
 
   syncSelected() {
     const checked = document.querySelectorAll('#video-list input:checked');
-    this.selectedVideos = Array.from(checked).map(cb => {
-      const i = parseInt(cb.id.replace('v-', ''));
-      return this.videos[i];
-    }).filter(Boolean);
+    this.selectedVideos = Array.from(checked).map(cb => this.videos[parseInt(cb.id.replace('v-', ''))]).filter(Boolean);
     this.renderQueue();
   }
 
@@ -280,9 +251,60 @@ class PopupController {
       c.innerHTML = '<div style="color:var(--text-3);font-size:10px;text-align:center;padding:6px">无视频</div>';
       return;
     }
-    c.innerHTML = this.selectedVideos.map((v, i) => `
-      <div class="queue-item"><span class="dot pending"></span>${i+1}. ${v.name}</div>
-    `).join('');
+    c.innerHTML = this.selectedVideos.map((v, i) => {
+      const status = this.videoStatuses[i] || 'pending';
+      const isSkipped = status === 'skipped';
+      const showConfirm = this.isPublishing && this.skipConfirmIndex === i;
+      return `<div class="queue-item${isSkipped ? ' skipped' : ''}" data-index="${i}">
+        <span class="dot ${status}"></span>
+        <span class="queue-name">${i+1}. ${this.escapeHtml(v.name)}</span>
+        ${isSkipped ? '<span class="queue-status">已跳过</span>' : ''}
+        ${showConfirm ? `<span class="skip-inline">
+          <button class="skip-yes" data-skip="${i}">跳过</button>
+          <button class="skip-no" data-cancel="${i}">取消</button>
+        </span>` : ''}
+      </div>`;
+    }).join('');
+
+    c.querySelectorAll('.skip-yes').forEach(btn => {
+      btn.addEventListener('click', (e) => { e.stopPropagation(); this.confirmSkip(parseInt(btn.dataset.skip)); });
+    });
+    c.querySelectorAll('.skip-no').forEach(btn => {
+      btn.addEventListener('click', (e) => { e.stopPropagation(); this.skipConfirmIndex = -1; this.renderQueue(); });
+    });
+
+    // 跳过功能暂时隐藏
+    // if (this.isPublishing) {
+    //   c.querySelectorAll('.queue-item').forEach(item => {
+    //     const idx = parseInt(item.dataset.index);
+    //     if (this.videoStatuses[idx] === 'pending') {
+    //       item.style.cursor = 'pointer';
+    //       item.addEventListener('click', () => this.showSkipConfirm(idx));
+    //     }
+    //   });
+    // }
+  }
+
+  showSkipConfirm(index) {
+    if (this.videoStatuses[index] !== 'pending') return;
+    this.skipConfirmIndex = this.skipConfirmIndex === index ? -1 : index;
+    this.renderQueue();
+  }
+
+  async confirmSkip(index) {
+    const videoName = this.selectedVideos[index]?.name;
+    // ★ 写入 storage：只记录视频名，不修改数组
+    try {
+      const data = await chrome.storage.local.get('_vpe_skip_names');
+      const arr = data['_vpe_skip_names'] || [];
+      if (!arr.includes(videoName)) arr.push(videoName);
+      await chrome.storage.local.set({ '_vpe_skip_names': arr });
+    } catch (_) {}
+    // 标记状态为 skipped（不从 selectedVideos 移除，保持索引对齐）
+    this.videoStatuses[index] = 'skipped';
+    this.skipConfirmIndex = -1;
+    this.renderQueue();
+    this.updateStatus(`已跳过: ${videoName}`);
   }
 
   fmtSize(b) {
@@ -293,7 +315,7 @@ class PopupController {
     return (b/1073741824).toFixed(1) + 'G';
   }
 
-  // ==================== 发布按钮（合并 start/stop） ====================
+  // ========== 发布按钮 ==========
 
   togglePublish() {
     if (this.isPublishing) this.stopPublish();
@@ -302,21 +324,59 @@ class PopupController {
 
   setPublishButtonState(running) {
     const btn = document.getElementById('publish-btn');
+    const container = document.getElementById('app-container');
+    const anim = document.getElementById('publish-animation');
     this.isPublishing = running;
-    if (running) { btn.textContent = '停止'; btn.classList.add('running'); }
-    else { btn.textContent = '发布'; btn.classList.remove('running'); }
+    if (running) {
+      btn.textContent = '停止'; btn.classList.add('running');
+      container.classList.add('publishing-mode');
+      anim.classList.remove('hidden');
+    } else {
+      btn.textContent = '发布'; btn.classList.remove('running');
+      container.classList.remove('publishing-mode');
+      anim.classList.add('hidden');
+      this.stopPublishTimer();
+    }
   }
 
-  // ==================== 进度条 ====================
+  // ========== 发布状态 ==========
 
-  showProgress(steps, current) {
-    const section = document.getElementById('progress-section');
-    section.classList.remove('hidden');
-    const pct = steps.length > 0 ? Math.round(((current + 1) / steps.length) * 100) : 0;
-    document.getElementById('progress-fill').style.width = pct + '%';
-    document.getElementById('progress-step').textContent = steps[current] || '准备中...';
-    document.getElementById('progress-detail').textContent = `${current + 1} / ${steps.length}`;
+  startPublishTimer(platformName, videoIndex, total, retryCount, timeoutSec) {
+    this.stopPublishTimer();
+    this.timerPlatform = platformName || '发布中';
+    this.timerVideoIndex = videoIndex;
+    this.timerTotal = total;
+    this.timerRetry = retryCount || 0;
+    this.timerTimeout = timeoutSec || 120;
+    this.updateTimerDisplay();
+    this.timerInterval = setInterval(() => this.updateTimerDisplay(), 1000);
   }
+
+  updateTimerDisplay() {
+    const elapsed = Math.floor((Date.now() - this.publishStartTime) / 1000);
+    const min = Math.floor(elapsed / 60);
+    const sec = elapsed % 60;
+    const timer = document.getElementById('anim-timer');
+    const label = document.getElementById('anim-label');
+    const detail = document.getElementById('anim-detail');
+    if (timer) timer.textContent = `${String(min).padStart(2,'0')}:${String(sec).padStart(2,'0')}`;
+    if (label) label.textContent = `在${this.timerPlatform}发布第${this.timerVideoIndex + 1}个，共${this.timerTotal}个`;
+    if (detail) detail.textContent = `超时 ${this.timerTimeout}s${this.timerRetry ? ' · 已重试 ' + this.timerRetry + ' 次' : ''}`;
+  }
+
+  stopPublishTimer() {
+    if (this.timerInterval) { clearInterval(this.timerInterval); this.timerInterval = null; }
+  }
+
+  hideAnimation() {
+    this.stopPublishTimer();
+    ['anim-label', 'anim-timer', 'anim-detail'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.textContent = '';
+    });
+  }
+
+  // ========== 进度 ==========
 
   hideProgress() {
     document.getElementById('progress-section').classList.add('hidden');
@@ -324,8 +384,8 @@ class PopupController {
   }
 
   updateQueueStatus(index, status) {
-    const items = document.querySelectorAll('.queue-item .dot');
-    if (items[index]) items[index].className = 'dot ' + status;
+    this.videoStatuses[index] = status;
+    this.renderQueue();
   }
 
   listenProgress() {
@@ -335,7 +395,10 @@ class PopupController {
   }
 
   handleProgressUpdate(msg) {
-    const { step, detail, current, total, videoIndex, status, done } = msg;
+    const { step, detail, current, total, videoIndex, status, done,
+            platformName, totalVideos, publishStartTime, retryCount, timeoutSeconds } = msg;
+    if (videoIndex !== undefined && status) this.updateQueueStatus(videoIndex, status);
+
     if (step) {
       document.getElementById('progress-section').classList.remove('hidden');
       const pct = total > 0 ? Math.round((current / total) * 100) : 0;
@@ -343,17 +406,34 @@ class PopupController {
       document.getElementById('progress-step').textContent = step;
       document.getElementById('progress-detail').textContent = detail || `${current} / ${total}`;
     }
-    if (videoIndex !== undefined && status) this.updateQueueStatus(videoIndex, status);
+
+    if (status === 'publishing' && !done) {
+      if (platformName) this.timerPlatform = platformName;
+      if (videoIndex !== undefined) this.timerVideoIndex = videoIndex;
+      if (totalVideos) this.timerTotal = totalVideos;
+      if (retryCount !== undefined) this.timerRetry = retryCount;
+      if (timeoutSeconds) this.timerTimeout = timeoutSeconds;
+      if (publishStartTime) this.publishStartTime = publishStartTime;
+      if (!this.timerInterval) {
+        this.startPublishTimer(this.timerPlatform, this.timerVideoIndex, this.timerTotal, this.timerRetry, this.timerTimeout);
+      } else {
+        this.updateTimerDisplay();
+      }
+    }
+
     if (done) {
       setTimeout(() => {
         this.setPublishButtonState(false);
         this.hideProgress();
+        this.hideAnimation();
         this.updateStatus('全部完成');
+        this.videoStatuses = [];
+        this.skipConfirmIndex = -1;
       }, 1500);
     }
   }
 
-  // ==================== 发布流程 ====================
+  // ========== 发布流程 ==========
 
   async startPublish() {
     if (!this.selectedPlatform) { this.updateStatus('请选择平台'); return; }
@@ -368,6 +448,18 @@ class PopupController {
 
     await this.saveSettings();
     this.setPublishButtonState(true);
+    this.videoStatuses = this.selectedVideos.map(() => 'pending');
+    this.skipConfirmIndex = -1;
+    this.renderQueue();
+
+    const platformName = this.selectedPlatform === 'douyin' ? '抖音' : '视频号';
+    this.publishStartTime = Date.now();
+    this.timerPlatform = platformName;
+    this.timerVideoIndex = 0;
+    this.timerTotal = this.selectedVideos.length;
+    this.timerRetry = 0;
+    this.timerTimeout = parseInt(document.getElementById('timeout-seconds').value) || 120;
+    this.startPublishTimer(platformName, 0, this.selectedVideos.length, 0, this.timerTimeout);
 
     const settings = {
       autoGenerate: autoGen,
@@ -378,19 +470,9 @@ class PopupController {
       scheduledPublish: document.getElementById('scheduled-publish').checked,
       scheduleTime: document.getElementById('schedule-time').value,
       autoRetry: document.getElementById('auto-retry').checked,
-      maxRetries: parseInt(document.getElementById('max-retries').value) || 1
+      maxRetries: parseInt(document.getElementById('max-retries').value) || 1,
+      timeoutSeconds: parseInt(document.getElementById('timeout-seconds').value) || 120
     };
-
-    // 构建进度步骤
-    const steps = [];
-    for (let i = 0; i < this.selectedVideos.length; i++) {
-      steps.push(`[${i+1}/${this.selectedVideos.length}] 上传: ${this.selectedVideos[i].name}`);
-      if (autoGen) steps.push(`[${i+1}/${this.selectedVideos.length}] AI 生成文案...`);
-      steps.push(`[${i+1}/${this.selectedVideos.length}] 填写信息...`);
-      steps.push(`[${i+1}/${this.selectedVideos.length}] 发布中...`);
-    }
-    this.showProgress(steps, 0);
-    this.renderQueue();
 
     try {
       const r = await chrome.runtime.sendMessage({
@@ -404,6 +486,7 @@ class PopupController {
       this.updateStatus(`失败: ${e.message}`);
       this.setPublishButtonState(false);
       this.hideProgress();
+      this.hideAnimation();
     }
   }
 
@@ -411,8 +494,10 @@ class PopupController {
     await chrome.runtime.sendMessage({ action: 'stopPublish' });
     this.setPublishButtonState(false);
     this.hideProgress();
+    this.hideAnimation();
     this.updateStatus('已停止');
-    document.querySelectorAll('.queue-item .dot').forEach(d => d.className = 'dot pending');
+    this.skipConfirmIndex = -1;
+    this.renderQueue();
   }
 
   async pollPublishState() {
@@ -420,16 +505,14 @@ class PopupController {
       try {
         const s = await chrome.runtime.sendMessage({ action: 'getPublishState' });
         if (s?.isPublishing && !this.isPublishing) this.setPublishButtonState(true);
-        else if (!s?.isPublishing && this.isPublishing) { this.setPublishButtonState(false); this.hideProgress(); }
+        else if (!s?.isPublishing && this.isPublishing) { this.setPublishButtonState(false); this.hideProgress(); this.hideAnimation(); }
       } catch (_) {}
     }, 2000);
   }
 
-  updateStatus(t) {
-    document.getElementById('status-text').textContent = t;
-  }
+  updateStatus(t) { document.getElementById('status-text').textContent = t; }
 
-  // ==================== AI 测试 ====================
+  // ========== AI 测试 ==========
 
   async testAI() {
     const provider = document.getElementById('ai-provider').value;
@@ -437,13 +520,10 @@ class PopupController {
     const model = document.getElementById('ai-model').value.trim();
     const resultEl = document.getElementById('test-result');
     const btn = document.getElementById('test-ai-btn');
-
     if (!provider) { resultEl.className = 'test-result fail'; resultEl.textContent = '请先选择 Provider'; resultEl.classList.remove('hidden'); return; }
     if (!apiKey) { resultEl.className = 'test-result fail'; resultEl.textContent = '请先填写 API Key'; resultEl.classList.remove('hidden'); return; }
-
     btn.disabled = true; btn.textContent = '测试中...';
     resultEl.className = 'test-result'; resultEl.textContent = ''; resultEl.classList.remove('hidden');
-
     try {
       const r = await chrome.runtime.sendMessage({ action: 'testAI', provider, apiKey, model });
       if (r?.success) { resultEl.className = 'test-result ok'; resultEl.textContent = `连接成功! 回复: ${r.reply?.substring(0, 100) || '(空)'}`; }
@@ -452,26 +532,19 @@ class PopupController {
     finally { btn.disabled = false; btn.textContent = '测试连接'; }
   }
 
-  // ==================== 目录浏览器 ====================
+  // ========== 目录浏览器 ==========
 
   showDirBrowser() {
     if (document.getElementById('dir-mask')) return;
     const cur = document.getElementById('video-path').value.trim() || '';
     const mask = document.createElement('div');
-    mask.id = 'dir-mask';
-    mask.className = 'dir-modal-mask';
-    mask.innerHTML = `
-      <div class="dir-modal">
-        <div class="dir-modal-head">
-          <span>选择目录</span>
-          <button id="dir-close">✕</button>
-        </div>
-        <div class="dir-modal-path" id="dir-path"></div>
-        <div class="dir-modal-list" id="dir-list"></div>
-        <div class="dir-modal-foot">
-          <button id="dir-ok">选择此目录</button>
-        </div>
-      </div>`;
+    mask.id = 'dir-mask'; mask.className = 'dir-modal-mask';
+    mask.innerHTML = `<div class="dir-modal">
+      <div class="dir-modal-head"><span>选择目录</span><button id="dir-close">✕</button></div>
+      <div class="dir-modal-path" id="dir-path"></div>
+      <div class="dir-modal-list" id="dir-list"></div>
+      <div class="dir-modal-foot"><button id="dir-ok">选择此目录</button></div>
+    </div>`;
     document.body.appendChild(mask);
     mask.querySelector('#dir-close').onclick = () => mask.remove();
     mask.onclick = (e) => { if (e.target === mask) mask.remove(); };
@@ -486,8 +559,7 @@ class PopupController {
   async loadDir(mask, dir) {
     const list = mask.querySelector('#dir-list');
     const pathEl = mask.querySelector('#dir-path');
-    pathEl.textContent = dir;
-    mask.dataset.path = dir;
+    pathEl.textContent = dir; mask.dataset.path = dir;
     list.innerHTML = '<div style="padding:16px;text-align:center;color:var(--text-3)">加载中...</div>';
     try {
       const r = await fetch(`http://localhost:3000/api/directories?path=${encodeURIComponent(dir)}`);

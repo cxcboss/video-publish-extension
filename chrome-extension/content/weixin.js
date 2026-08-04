@@ -74,22 +74,29 @@ class WeixinPublisher {
     console.log('[视频号发布助手] 初始化中...', this.isInIframe ? '(iframe内)' : '(主页面)');
 
     this.aborted = false;
+    this.clickedPublish = false; // 已点击发布按钮：此后拒绝中止，防止重复发布
     this.abortCheckInterval = null;
     this.setupMutationObserver();
 
     // ★ storage 变化监听 — 最可靠的中止信号通道
     chrome.storage.onChanged.addListener((changes, area) => {
       if (area === 'local' && changes['_vpe_abort'] && changes['_vpe_abort'].newValue) {
-        this.aborted = true;
-        console.log('[视频号发布助手] storage 中止信号');
+        if (this.clickedPublish) {
+          console.log('[视频号发布助手] 已点击发布，忽略中止信号');
+        } else {
+          this.aborted = true;
+          console.log('[视频号发布助手] storage 中止信号');
+        }
       }
     });
 
     chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (message.action === 'startPublish') {
         this.aborted = false;
+        this.clickedPublish = false;
         this.startAbortCheck();
-        this.handlePublish(message, sendResponse);
+        const videoNameCache = message.videos[0]?.name;
+        this.handlePublish(message, sendResponse, videoNameCache);
         return true;
       }
 
@@ -99,15 +106,21 @@ class WeixinPublisher {
           ready: true,
           isInIframe: this.isInIframe,
           elementCount: elementCount,
-          url: window.location.href
+          url: window.location.href,
+          clicked: this.clickedPublish
         });
         return true;
       }
 
       if (message.action === 'abortPublish') {
-        this.aborted = true;
-        console.log('[视频号发布助手] 消息中止信号');
-        sendResponse({ aborted: true });
+        if (this.clickedPublish) {
+          console.log('[视频号发布助手] 已点击发布，拒绝中止');
+          sendResponse({ aborted: false, clicked: true });
+        } else {
+          this.aborted = true;
+          console.log('[视频号发布助手] 消息中止信号');
+          sendResponse({ aborted: true });
+        }
         return true;
       }
     });
@@ -146,7 +159,7 @@ class WeixinPublisher {
     });
   }
 
-  async handlePublish(message, sendResponse) {
+  async handlePublish(message, sendResponse, videoNameCache) {
     try {
       if (this.isInIframe) {
         await this.publishSingleVideo(
@@ -170,6 +183,10 @@ class WeixinPublisher {
       if (this.aborted) return;
       console.error('[视频号发布助手] 发布失败:', error);
       this.notifyProgress(message.videoIndex + 1, message.totalVideos, message.videos[0].name, 'error');
+      // 明确失败 → 立即上报，background 不用等超时
+      this.reportPublishDone(message.videoIndex, videoNameCache || message.videos[0]?.name, {
+        status: 'failed', error: error.message
+      });
       sendResponse({ success: false, error: error.message });
     }
   }
@@ -266,6 +283,7 @@ class WeixinPublisher {
 
     // ── 步骤1: 等待页面加载 ──
     step('等待页面加载...');
+    this.reportStage('loading', videoIndex);
     await this.waitForDomReady();
     await this.delay(2000);
     if (this.aborted) return;
@@ -287,6 +305,7 @@ class WeixinPublisher {
     const file = await this.getVideoFile(videoPath, video.name);
     if (!file) throw new Error('无法获取视频文件');
     step(`视频文件大小: ${(file.size / 1024 / 1024).toFixed(1)}MB`);
+    this.reportStage('uploading', videoIndex, file.size);
 
     step('上传视频中...');
     const dataTransfer = new DataTransfer();
@@ -319,7 +338,19 @@ class WeixinPublisher {
     }
     if (this.aborted) return;
 
-    // ── 步骤6: 组装描述 + 话题 ──
+    // ── 步骤6-12: 填写表单并发布（公共方法，与 doUpload 共用） ──
+    this.reportStage('filling', videoIndex);
+    await this.fillFormAfterUpload({ video, videoInfo, useAI, aiContent, settings, videoIndex, totalVideos });
+  }
+
+  /**
+   * #18: 公共填表发布流程（publishSingleVideo 与 doUpload 共用）
+   * 组装描述+话题 → 填写描述 → 设置位置 → 选择活动 → 声明原创 → 定时发布 → 点击发布
+   */
+  async fillFormAfterUpload({ video, videoInfo, useAI, aiContent, settings, videoIndex, totalVideos }) {
+    const step = (msg) => console.log(`[视频号发布助手] [${videoIndex+1}/${totalVideos}] ${msg}`);
+
+    // ── 组装描述 + 话题 ──
     let fullDescription = '';
     let topics = [];
 
@@ -334,10 +365,10 @@ class WeixinPublisher {
 
     const topicText = topics.map(t => t.startsWith('#') ? t : `#${t}`).join(' ');
     fullDescription = fullDescription ? fullDescription + ' ' + topicText : topicText;
-
-    // ── 步骤7: 填写描述（带重试） ──
-    step('填写描述...');
     if (this.aborted) return;
+
+    // ── 填写描述（带重试） ──
+    step('填写描述...');
     let descOk = await this.fillDescription(fullDescription);
     if (!descOk) {
       step('描述填写失败，重试...');
@@ -345,30 +376,33 @@ class WeixinPublisher {
       descOk = await this.fillDescription(fullDescription);
     }
     step(`描述填写${descOk ? '成功' : '失败'}`);
-
-    // ── 步骤8: 设置位置 ──
-    step('设置位置...');
     if (this.aborted) return;
-    await this.setLocationNone();
 
-    // ── 步骤9: 选择活动 ──
+    // ── 设置位置 ──
+    step('设置位置...');
+    await this.setLocationNone();
+    if (this.aborted) return;
+
+    // ── 选择活动 ──
     const videoNameHasOriginal = video.name.includes('原创');
     if (videoInfo.activityName && !videoNameHasOriginal) {
       step(`选择活动: ${videoInfo.activityName}`);
       const actOk = await this.joinActivity(videoInfo.activityName);
       step(`活动选择${actOk ? '成功' : '失败'}`);
       if (this.aborted) return;
+    } else if (videoNameHasOriginal) {
+      console.log('[视频号发布助手] 视频文件名包含"原创"，跳过活动选择');
     }
 
-    // ── 步骤10: 声明原创 ──
+    // ── 声明原创 ──
     if (videoInfo.isOriginal) {
       step('声明原创...');
       const origOk = await this.declareOriginal();
-      if (!origOk) throw new Error('原创声明失败');
+      if (!origOk) throw new Error('原创声明失败，请手动完成声明后点击发布');
       step('原创声明成功');
     }
 
-    // ── 步骤11: 定时发布 ──
+    // ── 定时发布 ──
     const needSchedule = settings.scheduledPublish || (totalVideos > 1 && videoIndex >= 1);
     if (needSchedule) {
       step('设置定时发布...');
@@ -380,10 +414,10 @@ class WeixinPublisher {
       if (this.aborted) return;
     }
 
-    // ── 步骤12: 点击发布 ──
+    // ── 点击发布 ──
     step('点击发布...');
     if (this.aborted) return;
-    await this.clickPublish(video.name, videoIndex, totalVideos, topics, fullDescription);
+    await this.clickPublish(video.name, videoIndex, totalVideos, topics, fullDescription, settings.scheduledPublish === true);
     step('发布完成');
   }
 
@@ -527,6 +561,7 @@ class WeixinPublisher {
     dataTransfer.items.add(new File([file], video.name, { type: 'video/mp4' }));
     uploadInput.files = dataTransfer.files;
     uploadInput.dispatchEvent(new Event('change', { bubbles: true }));
+    this.reportStage('uploading', videoIndex, file.size);
 
     let aiPromise = null;
     if (useAI) {
@@ -544,66 +579,9 @@ class WeixinPublisher {
     }
     if (this.aborted) return;
 
-    let fullDescription = '';
-    let topics = [];
-
-    if (useAI) {
-      if (aiContent.description) {
-        fullDescription = aiContent.description;
-      }
-      if (aiContent.topics && aiContent.topics.length > 0) {
-        topics = aiContent.topics.slice(0, 5);
-      } else {
-        topics = this.defaultTopics;
-      }
-    } else {
-      topics = this.defaultTopics;
-    }
-    
-    const topicText = topics.map(t => t.startsWith('#') ? t : `#${t}`).join(' ');
-    
-    if (fullDescription) {
-      fullDescription = fullDescription + ' ' + topicText;
-    } else {
-      fullDescription = topicText;
-    }
-    
-    await this.fillDescription(fullDescription);
-    if (this.aborted) return;
-    await this.randomDelay();
-
-    await this.setLocationNone();
-    if (this.aborted) return;
-    await this.randomDelay();
-
-    const videoNameHasOriginal = video.name.includes('原创');
-    
-    if (videoInfo.activityName && !videoNameHasOriginal) {
-      await this.joinActivity(videoInfo.activityName);
-      if (this.aborted) return;
-      await this.randomDelay();
-    } else if (videoNameHasOriginal) {
-      console.log('[视频号发布助手] 视频文件名包含"原创"，跳过活动选择');
-    }
-
-    if (videoInfo.isOriginal) {
-      const originalResult = await this.declareOriginal();
-      if (!originalResult) {
-        throw new Error('原创声明失败，请手动完成声明后点击发布');
-      }
-      await this.randomDelay();
-    }
-
-    const firstVideoScheduled = settings.scheduledPublish === true;
-
-    if (firstVideoScheduled || (totalVideos > 1 && videoIndex >= 1)) {
-      await this.setScheduledPublish(videoIndex, totalVideos, firstVideoScheduled);
-      if (this.aborted) return;
-      await this.randomDelay();
-    }
-
-    if (this.aborted) return;
-    await this.clickPublish(video.name, videoIndex, totalVideos, topics, fullDescription);
+    // #18: 与 publishSingleVideo 共用填表发布流程
+    this.reportStage('filling', videoIndex);
+    await this.fillFormAfterUpload({ video, videoInfo, useAI, aiContent, settings, videoIndex, totalVideos });
   }
 
   async getVideoFile(videoPath, videoName) {
@@ -1608,7 +1586,7 @@ class WeixinPublisher {
            element.offsetHeight > 0;
   }
 
-  async clickPublish(videoName, videoIndex, totalVideos, topics, description) {
+  async clickPublish(videoName, videoIndex, totalVideos, topics, description, scheduledFlag = false) {
     console.log('[视频号发布助手] 查找发布按钮...');
     
     const buttons = document.querySelectorAll('button');
@@ -1657,19 +1635,62 @@ class WeixinPublisher {
       
       await this.delay(500);
       
-      console.log('[视频号发布助手] 发布流程完成，通知background...');
-      this.notifyProgress(videoIndex + 1, totalVideos, videoName, 'done', topics, description);
-      
-      await this.delay(300);
-      
       btn.click();
       console.log('[视频号发布助手] 已点击发布按钮');
+      
+      // 进入安全边界：已实际提交发布请求，background 禁止自动重试
+      this.clickedPublish = true;
+      this.reportStage('clicked', videoIndex);
+      
+      // #17: 点击成功后才通知完成
+      this.notifyProgress(videoIndex + 1, totalVideos, videoName, 'done', topics, description);
+      
+      // 主动验证发布结果（不依赖 tabs.onUpdated URL 跳转，wujie iframe 内跳转检测不到）
+      const result = await this.verifyPublishAfterClick(videoIndex);
+      this.reportPublishDone(videoIndex, videoName, {
+        status: result.status, error: result.error, scheduled: scheduledFlag
+      });
       
       return { success: true };
     }
     
     console.log('[视频号发布助手] 未找到合适的发布按钮');
+    // 没找到按钮 = 未点击 = 仍可安全重试；上报失败让 background 处理
+    this.reportPublishDone(videoIndex, videoName, { status: 'failed', error: '未找到发布按钮' });
     return { success: false };
+  }
+
+  /**
+   * 发布后验证：轮询检测成功信号（URL 跳转 post/list / 成功提示文本）
+   * 60 秒内无明确结果 → unknown（可能已发出，禁止重试）
+   */
+  async verifyPublishAfterClick(videoIndex, timeoutMs = 60000) {
+    this.reportStage('verifying', videoIndex);
+    const start = Date.now();
+    const successTexts = ['发表成功', '发布成功', '已发布', '已提交'];
+    const failTexts = ['发表失败', '发布失败', '发表异常', '请重试'];
+    while (Date.now() - start < timeoutMs) {
+      if (this.aborted) return { status: 'unknown', error: '已中止' };
+      // URL 跳转到发布列表 = 成功
+      const href = window.location.href;
+      if (href.includes('/platform/post/list') || href.includes('/platform/post/publish')) {
+        return { status: 'success', error: '' };
+      }
+      const shadowHosts = document.querySelectorAll('*');
+      for (const host of shadowHosts) {
+        if (host.shadowRoot) {
+          for (const el of host.shadowRoot.querySelectorAll('[class*="toast"], [class*="message"], [class*="notice"], [role="alert"], [class*="dialog"]')) {
+            if (!this.isElementVisible(el)) continue;
+            const t = (el.textContent || '').trim();
+            if (!t || t.length > 300) continue;
+            if (failTexts.some(f => t.includes(f))) return { status: 'failed', error: `页面提示: ${t.substring(0, 100)}` };
+            if (successTexts.some(s => t.includes(s))) return { status: 'success', error: '' };
+          }
+        }
+      }
+      await this.delay(2000);
+    }
+    return { status: 'unknown', error: '60秒内未检测到发布结果，请人工确认' };
   }
 
   async closeAllPickers() {
@@ -1712,6 +1733,28 @@ class WeixinPublisher {
         description: description
       });
     } catch (e) {}
+  }
+
+  // 阶段上报：background 据此重置超时定时器 / 判定安全边界
+  reportStage(stage, videoIndex, videoSize) {
+    try {
+      chrome.runtime.sendMessage({ action: 'publishStage', stage, videoIndex, videoSize }).catch(() => {});
+    } catch (_) {}
+  }
+
+  // 完成上报：status = success | failed | unknown
+  reportPublishDone(videoIndex, videoName, extra = {}) {
+    try {
+      chrome.runtime.sendMessage({
+        action: 'weixinPublishDone',
+        videoName,
+        videoIndex,
+        videoPath: extra.videoPath || '',
+        scheduled: extra.scheduled || false,
+        status: extra.status || 'success',
+        error: extra.error || ''
+      }).catch(() => {});
+    } catch (_) {}
   }
 
   delay(ms) {

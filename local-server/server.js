@@ -34,7 +34,8 @@ function saveHistory(history) {
 
 function escapeHtml(text) {
   if (!text) return '';
-  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  // #7: 转义单引号，防止 onclick 属性内 JS 字符串逃逸
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 function formatDate(dateStr) {
@@ -194,6 +195,8 @@ app.get('/', (req, res) => {
     .status-badge.scheduled svg { fill: var(--warn); }
     .status-badge.failed { background: var(--danger-bg); color: var(--danger); }
     .status-badge.failed svg { fill: var(--danger); }
+    .status-badge.unknown { background: rgba(156,39,176,0.12); color: #9C27B0; }
+    .status-badge.unknown svg { fill: #9C27B0; }
 
     /* 操作按钮 */
     .action-btns { display: flex; gap: 4px; flex-shrink: 0; }
@@ -287,10 +290,16 @@ app.get('/', (req, res) => {
           </div>
           <div class="history-list">
             ${records.map(record => {
-              const statusCls = record.status === 'failed' ? 'failed' : (record.scheduled ? 'scheduled' : 'success');
-              const statusText = record.status === 'failed' ? '失败' : (record.scheduled ? '定时' : '已发');
+              const statusCls = record.status === 'failed' ? 'failed'
+                : record.status === 'unknown' ? 'unknown'
+                : (record.scheduled ? 'scheduled' : 'success');
+              const statusText = record.status === 'failed' ? '失败'
+                : record.status === 'unknown' ? '结果未知'
+                : (record.scheduled ? '定时' : '已发');
               const statusIcon = statusCls === 'failed'
                 ? '<svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 15v-2h2v2h-2zm0-4V7h2v6h-2z"/></svg>'
+                : statusCls === 'unknown'
+                  ? '<svg viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2zm1 17h-2v-2h2v2zm2.07-7.75l-.9.92C13.45 12.9 13 13.5 13 15h-2v-.5c0-1.1.45-2.1 1.17-2.83l1.24-1.26c.37-.36.59-.86.59-1.41 0-1.1-.9-2-2-2s-2 .9-2 2H8c0-2.21 1.79-4 4-4s4 1.79 4 4c0 .88-.36 1.68-.93 2.25z"/></svg>'
                 : statusCls === 'scheduled'
                   ? '<svg viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67V7z"/></svg>'
                   : '<svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>';
@@ -388,8 +397,11 @@ app.get('/', (req, res) => {
 });
 
 app.post('/api/publish-record', (req, res) => {
+  const history = loadHistory();
+  // #14: 用现有最大 id + 1 生成唯一 id，避免 Date.now() 同毫秒冲突
+  const maxId = history.reduce((m, h) => Math.max(m, h.id || 0), 0);
   const record = {
-    id: Date.now(),
+    id: maxId + 1,
     videoName: req.body.videoName || '未知视频',
     videoPath: req.body.videoPath || '',
     platform: req.body.platform || 'unknown',
@@ -401,8 +413,7 @@ app.post('/api/publish-record', (req, res) => {
     description: req.body.description || '',
     publishTime: req.body.publishTime || new Date().toISOString()
   };
-  
-  const history = loadHistory();
+
   history.unshift(record);
   saveHistory(history);
   
@@ -481,9 +492,25 @@ app.get('/api/video/file', (req, res) => {
   const range = req.headers.range;
 
   if (range) {
-    const parts = range.replace(/bytes=/, '').split('-');
-    const start = parseInt(parts[0], 10);
-    const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+    // #15: 校验 Range 请求，非法/越界范围返回 416
+    const match = range.match(/^bytes=(\d*)-(\d*)$/);
+    if (!match || (match[1] === '' && match[2] === '')) {
+      return res.status(416).json({ error: '无效的 Range 请求' });
+    }
+    let start, end;
+    if (match[1] === '') {
+      // 后缀范围 bytes=-N：最后 N 个字节
+      const suffixLen = parseInt(match[2], 10);
+      start = fileSize - suffixLen;
+      end = fileSize - 1;
+    } else {
+      start = parseInt(match[1], 10);
+      end = match[2] === '' ? fileSize - 1 : parseInt(match[2], 10);
+    }
+    if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || start >= fileSize || end < start) {
+      return res.status(416).json({ error: '无效的 Range 请求' });
+    }
+    if (end >= fileSize) end = fileSize - 1;
     const chunksize = (end - start) + 1;
     const file = fs.createReadStream(filePath, { start, end });
 

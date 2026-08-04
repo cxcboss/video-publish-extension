@@ -32,7 +32,6 @@ video-publish-extension/
 │   └── Sources/
 ├── win_app/                   # Windows 桌面工具（Flutter）
 │   └── lib/main.dart
-├── shared/                    # AI 服务模块
 └── .github/workflows/         # CI/CD 自动构建
 ```
 
