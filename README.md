@@ -10,7 +10,15 @@ AI 驱动的浏览器扩展 + 桌面管理工具，支持自动发布视频到�
 - **定时发布** — 抖音原生定时发布，视频号自动延时
 - **批量发布** — 目录自动加载，拖拽排序，队列发布
 - **星图任务** — 抖音小游戏自动关联星图任务
-- **超时重试** — 单个视频发布超时自动重试
+- **超时重试** — 阶段感知的可靠重试（v2.9.0 重构），点击发布后自动防重复
+
+## 文档
+
+| 文档 | 说明 |
+|------|------|
+| [更新日志](CHANGELOG.md) | 各版本变更记录 |
+| [版本发布准则](docs/RELEASING.md) | 版本号规则、发布流程、检查清单 |
+| [开发规范](docs/DEVELOPMENT.md) | 目录职责、核心架构、代码约定 |
 
 ## 项目结构
 
@@ -19,7 +27,7 @@ video-publish-extension/
 ├── chrome-extension/          # Chrome 浏览器扩展
 │   ├── manifest.json
 │   ├── popup/                 # 弹窗 UI（发布控制面板）
-│   ├── background/            # 后台服务（AI 调用、发布流程）
+│   ├── background/            # 后台服务（AI 调用、发布流程、超时重试）
 │   ├── content/               # 页面自动化脚本
 │   │   ├── douyin.js          # 抖音创作者平台
 │   │   └── weixin.js          # 视频号发布平台
@@ -31,7 +39,9 @@ video-publish-extension/
 │   ├── Package.swift
 │   └── Sources/
 ├── win_app/                   # Windows 桌面工具（Flutter）
-│   └── lib/main.dart
+│   ├── lib/main.dart
+│   └── assets/                # 打包副本（发布时同步）
+├── docs/                      # 项目文档
 └── .github/workflows/         # CI/CD 自动构建
 ```
 
