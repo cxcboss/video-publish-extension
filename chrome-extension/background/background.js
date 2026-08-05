@@ -465,6 +465,24 @@ async function handlePublishCompleted(message) {
   const idx = publishState.currentIndex;
   const status = message.status || (message.success === false ? 'failed' : 'success');
   const videoName = message.videoName || publishState.videos[idx]?.name || '未知视频';
+
+  // ★ 失败自动重试：未点击发布（安全阶段，clicked=false）的明确失败 → 自动重试
+  // （已点击发布后的失败/未知 → 不重试，防止重复发布，直接记录）
+  if (status === 'failed' && !message.clicked) {
+    const retries = publishState.retryCounts[idx] || 0;
+    const max = publishState.settings.maxRetries || 1;
+    if (publishState.settings.autoRetry && retries < max) {
+      publishState.retryCounts[idx] = retries + 1;
+      console.log(`[BG] 发布失败，自动重试 (${retries + 1}/${max}): ${message.error || '未知原因'}`);
+      sendProgress(`发布失败，自动重试 (${retries + 1}/${max})`, 'publishing', idx + 1, publishState.videos.length);
+      // 失败时内容脚本已退出，残留标签页由 publishNextVideo 清理并重开
+      await sleep(1500);
+      _doneLock = false;
+      if (publishState.isPublishing) await publishNextVideo();
+      return;
+    }
+  }
+
   const detail = status === 'success' ? 'done' : 'error';
   const statusText = status === 'success' ? '完成' : (status === 'unknown' ? '结果未知' : '失败');
   sendProgress(`${statusText}: ${videoName}`, detail, idx + 1, publishState.videos.length);
@@ -521,12 +539,13 @@ async function sendPublishCommand(tabId) {
       action: 'startPublish', videos: [video], settings: publishState.settings,
       videoPath: publishState.videoPath, videoIndex: publishState.currentIndex, totalVideos: publishState.totalVideos
     });
-    // 内容脚本明确报错（如找不到上传入口）→ 立即记录失败，不用等超时
+    // 内容脚本明确报错（如找不到上传入口）→ 立即处理失败（含自动重试），不用等超时
     if (r && r.success === false && publishState.isPublishing && publishState.currentIndex === videoIndexForCommand) {
       console.error('[BG] 内容脚本发布失败:', r.error);
       await handlePublishCompleted({
         videoName: video.name, videoPath: publishState.videoPath || '',
-        videoIndex: publishState.currentIndex, status: 'failed', error: r.error || '内容脚本执行失败'
+        videoIndex: publishState.currentIndex, status: 'failed', error: r.error || '内容脚本执行失败',
+        clicked: r.clicked || false
       });
     }
   } catch (e) {

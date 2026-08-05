@@ -183,11 +183,11 @@ class WeixinPublisher {
       if (this.aborted) return;
       console.error('[视频号发布助手] 发布失败:', error);
       this.notifyProgress(message.videoIndex + 1, message.totalVideos, message.videos[0].name, 'error');
-      // 明确失败 → 立即上报，background 不用等超时
+      // 明确失败 → 立即上报，background 按阶段决定重试或记录
       this.reportPublishDone(message.videoIndex, videoNameCache || message.videos[0]?.name, {
         status: 'failed', error: error.message
       });
-      sendResponse({ success: false, error: error.message });
+      sendResponse({ success: false, error: error.message, clicked: this.clickedPublish });
     }
   }
 
@@ -1743,6 +1743,7 @@ class WeixinPublisher {
   }
 
   // 完成上报：status = success | failed | unknown
+  // clicked 标志：是否已点击发布（true 时 background 禁止自动重试，防止重复发布）
   reportPublishDone(videoIndex, videoName, extra = {}) {
     try {
       chrome.runtime.sendMessage({
@@ -1752,7 +1753,8 @@ class WeixinPublisher {
         videoPath: extra.videoPath || '',
         scheduled: extra.scheduled || false,
         status: extra.status || 'success',
-        error: extra.error || ''
+        error: extra.error || '',
+        clicked: this.clickedPublish
       }).catch(() => {});
     } catch (_) {}
   }
