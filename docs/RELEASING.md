@@ -73,27 +73,50 @@ diff -q local-server/server.js win_app/assets/local-server/server.js
 
 ## 发布流程
 
+**核心：Release 必须附带 `chrome-extension` 压缩包**（Mac App 的更新功能依赖下载 Release 附件 zip；不带 zip 的 Release 会导致 App 内"更新插件"不可用）。zip 根目录直接是扩展内容（`manifest.json` 在根目录），参考历史格式：`chrome-extension-vX.Y.Z.zip`。
+
 ```bash
 # 1. 检查并暂存
 git status
 git add -A
 
 # 2. 提交（消息格式：vX.Y.Z: 一句话描述）
-git commit -m "v2.9.0: 失败重试功能重构，修复重试不生效问题"
+git commit -m "v2.9.1: 修复发布失败的视频不自动重试"
 
 # 3. 打标签并推送（推送触发 GitHub Actions 构建 Mac/Windows）
-git tag v2.9.0
+git tag v2.9.1
 git push origin main --tags
 
-# 4. 创建 GitHub Release（标题格式：vX.Y.Z: 描述）
-gh release create v2.9.0 --repo cxcboss/video-publish-extension \
-  --title "vX.Y.Z: 描述" --notes "$(cat RELEASE_NOTES.md)"
+# 4. 打包插件（zip 根目录直接是扩展内容，排除 .DS_Store）
+rm -f /tmp/chrome-extension-v2.9.1.zip
+(cd chrome-extension && zip -r /tmp/chrome-extension-v2.9.1.zip . -x "*.DS_Store" -q)
 
-# 5. 确认 CI 构建成功
+# 5. 创建 Release 并上传插件压缩包
+gh release create v2.9.1 --repo cxcboss/video-publish-extension \
+  --title "v2.9.1: 描述" --notes "更新说明（含升级说明）"
+gh release upload v2.9.1 /tmp/chrome-extension-v2.9.1.zip \
+  --repo cxcboss/video-publish-extension
+
+# 6. 验证发布包（模拟 App 更新逻辑：下载 → 解压 → 检查 manifest）
+gh release download v2.9.1 --repo cxcboss/video-publish-extension \
+  --pattern "chrome-extension-v2.9.1.zip"
+unzip -l chrome-extension-v2.9.1.zip | grep -E "manifest.json|DS_Store"
+# 必须包含 manifest.json，且不得包含 .DS_Store
+
+# 7. 确认 CI 构建成功
 gh run list --repo cxcboss/video-publish-extension --limit 3
 ```
 
 提交消息约定：`vX.Y.Z: 简短描述`（参考历史提交）。
+
+### 发布自检（v2.9.1 踩坑记录）
+
+发布 v2.9.1 时遗漏 manifest 版本号同步，导致 Release zip 内版本为 2.9.0。
+**打包前必须确认**：
+
+```bash
+grep '"version"' chrome-extension/manifest.json   # 必须等于本次版本号
+```
 
 ## 回滚
 
