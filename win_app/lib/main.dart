@@ -19,6 +19,7 @@ const _bundledFiles = <String>[
   'assets/chrome-extension/background/background.js',
   'assets/chrome-extension/content/douyin.js',
   'assets/chrome-extension/content/weixin.js',
+  'assets/chrome-extension/shared/pure.js',
   'assets/chrome-extension/popup/popup.html',
   'assets/chrome-extension/popup/popup.js',
   'assets/chrome-extension/popup/popup.css',
@@ -409,7 +410,7 @@ class _HomePageState extends State<HomePage> with WindowListener {
                   const SizedBox(width: 8),
                   const Text('视频发布助手', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600)),
                   const Spacer(),
-                  Text('v${extVersion.isEmpty ? "2.5.2" : extVersion}', style: const TextStyle(fontSize: 11, color: Colors.grey)),
+                  Text('v${extVersion.isEmpty ? "未知" : extVersion}', style: const TextStyle(fontSize: 11, color: Colors.grey)),
                 ]),
                 const SizedBox(height: 14),
 

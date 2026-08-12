@@ -22,6 +22,7 @@ class DouyinPublisher {
     this.defaultTopics = ['#动画', '#奇葩游戏', '#游戏视频', '#小游戏', '#休闲游戏'];
     this.aborted = false;
     this.abortCheckInterval = null;
+    this.overrides = {}; // 平台改版应急：storage.selectorOverrides.douyin 覆盖默认选择器
     this.init();
   }
 
@@ -43,6 +44,7 @@ class DouyinPublisher {
       if (message.action === 'startPublish') {
         this.aborted = false;
         this.clickedPublish = false;
+        this.loadSelectorOverrides();
         this.startAbortCheck();
         const videoNameCache = message.videos[0]?.name;
         this.publishSingleVideo(message.videos[0], message.settings, message.videoPath, message.videoIndex, message.totalVideos)
@@ -96,6 +98,22 @@ class DouyinPublisher {
     if (this.abortCheckInterval) { clearInterval(this.abortCheckInterval); this.abortCheckInterval = null; }
   }
 
+  // 平台改版应急：从 storage 读取选择器覆盖配置（无 UI，高级用户手动写入）
+  async loadSelectorOverrides() {
+    try {
+      const data = await chrome.storage.local.get('selectorOverrides');
+      this.overrides = (data.selectorOverrides && data.selectorOverrides.douyin) || {};
+    } catch (_) { this.overrides = {}; }
+  }
+
+  async serverBaseUrl() {
+    try {
+      const d = await chrome.storage.local.get('serverPort');
+      const port = parseInt(d.serverPort, 10) || 3000;
+      return `http://localhost:${port}`;
+    } catch (_) { return 'http://localhost:3000'; }
+  }
+
   async publishSingleVideo(video, settings, videoPath, videoIndex, totalVideos) {
     const idx = videoIndex + 1;
     const step = (msg) => console.log(`[抖音发布助手] [${idx}/${totalVideos}] ${msg}`);
@@ -126,8 +144,9 @@ class DouyinPublisher {
     this.reportStage('uploading', videoIndex, file.size);
 
     // DataTransfer API 注入文件到 input[type="file]（React 不拦截 file input）
+    // file 已是带正确文件名/类型的 File，直接注入避免二次内存复制
     const dataTransfer = new DataTransfer();
-    dataTransfer.items.add(new File([file], video.name, { type: 'video/mp4' }));
+    dataTransfer.items.add(file);
     uploadInput.files = dataTransfer.files;
     uploadInput.dispatchEvent(new Event('change', { bubbles: true }));
 
@@ -138,9 +157,9 @@ class DouyinPublisher {
       aiPromise = this.generateAIContent(video.name, settings);
     }
 
-    // 轮询等待上传完成（最多8秒，超时则继续填写表单）
+    // 轮询等待上传完成（按视频大小自适应，超时则继续填写表单）
     this.notifyProgress('等待视频处理...', idx, totalVideos);
-    const uploadOk = await this.waitForUploadComplete(8);
+    const uploadOk = await this.waitForUploadComplete(VPEPure.waitSecondsForFileSize(file.size));
     if (!uploadOk) step('上传检测超时，继续填写表单...');
     if (this.aborted) return;
 
@@ -254,7 +273,7 @@ class DouyinPublisher {
    * 查找 file input 元素（按优先级匹配 accept 类型）
    */
   async findUploadInput() {
-    const selectors = [
+    const selectors = this.overrides.uploadInputSelectors || [
       'input[type="file"][accept*="video"]',
       'input[type="file"][accept*=".mp4"]',
       'input[type="file"][accept*=".mov"]',
@@ -274,9 +293,12 @@ class DouyinPublisher {
   async getVideoFile(videoPath, videoName) {
     const fullPath = videoPath.endsWith('/') ? `${videoPath}${videoName}` : `${videoPath}/${videoName}`;
     try {
-      const response = await fetch(`http://localhost:3000/api/video/file?path=${encodeURIComponent(fullPath)}`);
+      const base = await this.serverBaseUrl();
+      const response = await fetch(`${base}/api/video/file?path=${encodeURIComponent(fullPath)}`);
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      return await response.blob();
+      const blob = await response.blob();
+      // 直接构造带文件名/类型的 File（上传入口要求文件带扩展名）
+      return new File([blob], videoName, { type: VPEPure.mimeForName(videoName) });
     } catch (error) {
       console.error('[抖音发布助手] 获取视频文件失败:', error);
       return null;
@@ -356,16 +378,13 @@ class DouyinPublisher {
    * 优先匹配 placeholder 含"话题""tag""#""搜索"的元素，兜底选最小的 contenteditable
    */
   findTagInput() {
+    const keywords = this.overrides.tagInputKeywords || ['话题', 'tag', 'topic', '搜索', '#'];
     const allEditable = document.querySelectorAll('[contenteditable="true"]');
     for (const el of allEditable) {
       if (!this.isElementVisible(el)) continue;
-      const cls = el.className || '';
-      const placeholder = el.getAttribute('data-placeholder') || el.getAttribute('placeholder') || '';
-      if (placeholder.includes('话题') || placeholder.includes('tag') ||
-          placeholder.includes('搜索') || placeholder.includes('Tag') ||
-          cls.includes('tag') || cls.includes('Tag') ||
-          cls.includes('topic') || cls.includes('Topic') ||
-          placeholder.includes('#')) {
+      const cls = (el.className || '').toLowerCase();
+      const placeholder = ((el.getAttribute('data-placeholder') || el.getAttribute('placeholder') || '')).toLowerCase();
+      if (keywords.some(k => placeholder.includes(k) || cls.includes(k))) {
         return el;
       }
     }
@@ -425,11 +444,13 @@ class DouyinPublisher {
   async clickPublish() {
     const allButtons = document.querySelectorAll('button');
     const publishButtons = [];
+    const p1Texts = this.overrides.publishButtonTextsP1 || ['发布', '发表'];
+    const p2Texts = this.overrides.publishButtonTextsP2 || ['立即发布', '立即发表'];
     for (const btn of allButtons) {
       const text = (btn.textContent || '').trim();
       if (this.isElementVisible(btn) && !btn.disabled) {
-        if (text === '发布' || text === '发表') publishButtons.push({ btn, priority: 1 });
-        else if (text === '立即发布' || text === '立即发表') publishButtons.push({ btn, priority: 2 });
+        if (p1Texts.includes(text)) publishButtons.push({ btn, priority: 1 });
+        else if (p2Texts.includes(text)) publishButtons.push({ btn, priority: 2 });
         else if (text.includes('发布') && !text.includes('高清') && !text.includes('定时')) publishButtons.push({ btn, priority: 3 });
       }
     }
@@ -498,7 +519,6 @@ class DouyinPublisher {
 
   notifyProgress(step, current, total, status) {
     try {
-      chrome.runtime.sendMessage({ action: 'publishProgress', status: step, current, total }).catch(() => {});
       chrome.runtime.sendMessage({
         action: 'progressUpdate', step, detail: status || 'publishing',
         current, total, videoIndex: current - 1, status: status || 'publishing'
@@ -604,7 +624,7 @@ class DouyinPublisher {
           // fallback: 使用原始时间
           resolve(this._originalScheduleTime || new Date().toISOString().replace('T', ' ').substring(0, 16));
         } else {
-          resolve(response.scheduledTime);
+          resolve((response && response.scheduledTime) || this._originalScheduleTime || new Date().toISOString().replace('T', ' ').substring(0, 16));
         }
       });
     });
@@ -616,12 +636,7 @@ class DouyinPublisher {
    * 从文件名解析星图任务：匹配 "小游戏-xxx" 格式，去尾"推广"
    */
   parseTaskFromName(fileName) {
-    const match = fileName.match(/^小游戏-(.+)/);
-    if (!match) return null;
-    const activityName = match[1].replace(/\.[^.]+$/, '');
-    const searchTerm = activityName.replace(/推广$/, '').trim();
-    if (!searchTerm) return null;
-    return { activityName, searchTerm };
+    return VPEPure.parseTaskFromName(fileName);
   }
 
   /**
@@ -641,6 +656,7 @@ class DouyinPublisher {
    */
   async selectStarTask(searchTerm) {
     // 步骤0: 渐进式滚动触发 React 懒加载，同时尝试查找按钮
+    const starTexts = this.overrides.starTaskBtnTexts || ['请选择星图任务'];
     let starBtn = null;
     const pageHeight = document.body.scrollHeight;
     const viewportH = window.innerHeight;
@@ -651,7 +667,7 @@ class DouyinPublisher {
       starBtn = document.querySelector('[class*="star-btn"]');
       if (starBtn) break;
       for (const el of document.querySelectorAll('span, div')) {
-        if (el.textContent?.trim() === '请选择星图任务' && this.isElementVisible(el)) { starBtn = el; break; }
+        if (starTexts.includes(el.textContent?.trim()) && this.isElementVisible(el)) { starBtn = el; break; }
       }
       if (starBtn) break;
       for (const el of document.querySelectorAll('[class*="star"]')) {
@@ -667,7 +683,7 @@ class DouyinPublisher {
         starBtn = document.querySelector('[class*="star-btn"]');
         if (starBtn) break;
         for (const el of document.querySelectorAll('span, div')) {
-          if (el.textContent?.trim() === '请选择星图任务' && this.isElementVisible(el)) { starBtn = el; break; }
+          if (starTexts.includes(el.textContent?.trim()) && this.isElementVisible(el)) { starBtn = el; break; }
         }
         if (starBtn) break;
         await this.delay(1000);

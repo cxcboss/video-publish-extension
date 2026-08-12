@@ -1,22 +1,20 @@
 {
   "manifest_version": 3,
   "name": "AI 视频发布助手",
-  "version": "2.9.1",
+  "version": "2.10.0",
   "description": "AI驱动的视频自动发布工具，支持抖音和视频号平台",
   "permissions": [
-    "activeTab",
     "storage",
-    "scripting",
     "tabs",
-    "nativeMessaging",
-    "webRequest",
     "debugger",
-    "sidePanel"
+    "sidePanel",
+    "alarms"
   ],
   "host_permissions": [
     "https://creator.douyin.com/*",
     "https://channels.weixin.qq.com/*",
     "http://localhost:3000/*",
+    "http://127.0.0.1:3000/*",
     "https://api.xiaomi.com/*",
     "https://api.xiaomimimo.com/*",
     "https://api.openai.com/*",
@@ -40,13 +38,13 @@
   "content_scripts": [
     {
       "matches": ["https://creator.douyin.com/*"],
-      "js": ["content/douyin.js"],
+      "js": ["shared/pure.js", "content/douyin.js"],
       "run_at": "document_start",
       "all_frames": true
     },
     {
       "matches": ["https://channels.weixin.qq.com/*"],
-      "js": ["content/weixin.js"],
+      "js": ["shared/pure.js", "content/weixin.js"],
       "run_at": "document_start",
       "all_frames": true
     }

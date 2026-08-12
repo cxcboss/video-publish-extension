@@ -11,6 +11,7 @@ target/
 
 # 运行时数据（含本地文件路径，不应入库）
 local-server/publish_history.json
+local-server/retry_queue.json
 
 # 本地工具目录
 .claude/

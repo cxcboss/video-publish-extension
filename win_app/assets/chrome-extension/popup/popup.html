@@ -29,6 +29,12 @@
       </div>
     </div>
 
+    <!-- 历史页重发队列提示 -->
+    <div id="retry-banner" class="retry-banner hidden">
+      <span>历史页有 <b id="retry-banner-count">0</b> 个待重发视频</span>
+      <button id="retry-banner-btn">导入并重发</button>
+    </div>
+
     <!-- 发布进度 -->
     <div id="progress-section" class="section compact hidden">
       <div class="progress-bar">
@@ -131,6 +137,12 @@
         <button id="refresh-btn" class="path-btn refresh" title="刷新列表">↻</button>
         <button id="browse-btn" class="path-btn">浏览</button>
       </div>
+      <div class="row-between" style="margin-top:6px">
+        <span class="hint">本地服务端口（默认 3000）</span>
+        <div class="inline-input">
+          <input type="number" id="server-port" min="1" max="65535" value="3000" class="small-input" style="width:70px">
+        </div>
+      </div>
       <div id="video-list" class="video-list"></div>
     </div>
 
@@ -139,6 +151,9 @@
       <div class="section-header">
         <span>发布队列</span>
         <span class="queue-count" id="queue-count">0</span>
+      </div>
+      <div id="restore-wrap" class="restore-wrap hidden">
+        <button id="restore-btn" class="restore-btn">恢复上次队列</button>
       </div>
       <div id="publish-queue" class="publish-queue"></div>
     </div>

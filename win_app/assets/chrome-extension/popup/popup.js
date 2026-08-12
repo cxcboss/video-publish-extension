@@ -8,6 +8,7 @@ class PopupController {
     this.loadTimeout = null;
     this.draggedItem = null;
     this.videoStatuses = [];
+    this.videoRetries = [];
     this.skipConfirmIndex = -1;
     this.timerInterval = null;
     this.publishStartTime = 0;
@@ -16,6 +17,8 @@ class PopupController {
     this.timerTotal = 0;
     this.timerRetry = 0;
     this.timerTimeout = 120;
+    this.lastQueue = null;
+    this.retryQueuePollInterval = null;
     this.init();
   }
 
@@ -25,9 +28,20 @@ class PopupController {
     this.checkServerStatus();
     this.pollPublishState();
     this.listenProgress();
+    this.loadLastQueueRestore();
+    this.startRetryQueuePolling();
     // #19: 版本号从 manifest 动态读取，避免与 manifest 不同步
     const manifest = chrome.runtime.getManifest();
     if (manifest?.version) document.getElementById('version-text').textContent = 'v' + manifest.version;
+  }
+
+  // 本地服务地址（端口可配置，默认 3000）
+  async serverBaseUrl() {
+    try {
+      const d = await chrome.storage.local.get('serverPort');
+      const port = parseInt(d.serverPort, 10) || 3000;
+      return `http://localhost:${port}`;
+    } catch (_) { return 'http://localhost:3000'; }
   }
 
   // ========== 事件绑定 ==========
@@ -56,6 +70,11 @@ class PopupController {
       document.getElementById('ai-arrow').classList.toggle('open');
     });
     document.getElementById('test-ai-btn').addEventListener('click', () => this.testAI());
+    document.getElementById('server-port').addEventListener('change', () => { this.saveSettings(); this.checkServerStatus(); });
+    const restoreBtn = document.getElementById('restore-btn');
+    if (restoreBtn) restoreBtn.addEventListener('click', () => this.restoreLastQueue());
+    const retryBannerBtn = document.getElementById('retry-banner-btn');
+    if (retryBannerBtn) retryBannerBtn.addEventListener('click', () => this.applyRetryQueue());
 
     const pathInput = document.getElementById('video-path');
     pathInput.addEventListener('input', (e) => {
@@ -75,7 +94,8 @@ class PopupController {
     const text = document.getElementById('status-text');
     const hint = document.getElementById('server-hint');
     try {
-      const r = await fetch('http://localhost:3000/health');
+      const base = await this.serverBaseUrl();
+      const r = await fetch(`${base}/health`);
       if (r.ok) { dot.className = 'status-dot on'; text.textContent = '服务已连接'; hint.classList.add('hidden'); return; }
     } catch (_) {}
     dot.className = 'status-dot off'; text.textContent = '服务未启动'; hint.classList.remove('hidden');
@@ -88,7 +108,7 @@ class PopupController {
       const r = await chrome.storage.local.get([
         'videoPath', 'aiProvider', 'aiKey', 'aiModel',
         'autoGenerate', 'videoContent', 'scheduledPublish', 'scheduleTime',
-        'autoRetry', 'maxRetries', 'timeoutSeconds'
+        'autoRetry', 'maxRetries', 'timeoutSeconds', 'serverPort'
       ]);
       if (r.videoPath) { document.getElementById('video-path').value = r.videoPath; this.videoPath = r.videoPath; this.loadVideos(r.videoPath); }
       if (r.aiProvider) document.getElementById('ai-provider').value = r.aiProvider;
@@ -103,6 +123,7 @@ class PopupController {
       else document.getElementById('auto-retry').checked = true; // 默认开启
       if (r.maxRetries) document.getElementById('max-retries').value = r.maxRetries;
       if (r.timeoutSeconds) document.getElementById('timeout-seconds').value = r.timeoutSeconds;
+      if (r.serverPort) document.getElementById('server-port').value = r.serverPort;
       // 根据 auto-retry 状态显示/隐藏选项
       document.getElementById('retry-options').classList.toggle('hidden', !document.getElementById('auto-retry').checked);
     } catch (e) { console.error(e); }
@@ -127,7 +148,8 @@ class PopupController {
         scheduleTime: document.getElementById('schedule-time').value,
         autoRetry: document.getElementById('auto-retry').checked,
         maxRetries: parseInt(document.getElementById('max-retries').value) || 1,
-        timeoutSeconds: parseInt(document.getElementById('timeout-seconds').value) || 120
+        timeoutSeconds: parseInt(document.getElementById('timeout-seconds').value) || 120,
+        serverPort: parseInt(document.getElementById('server-port').value) || 3000
       });
     } catch (e) { console.error(e); }
   }
@@ -158,7 +180,8 @@ class PopupController {
     this.videoPath = path;
     this.updateStatus('加载中...');
     try {
-      const r = await fetch(`http://localhost:3000/api/videos?path=${encodeURIComponent(path)}`);
+      const base = await this.serverBaseUrl();
+      const r = await fetch(`${base}/api/videos?path=${encodeURIComponent(path)}`);
       if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error || r.status); }
       const d = await r.json();
       if (d.videos?.length > 0) {
@@ -254,10 +277,12 @@ class PopupController {
     c.innerHTML = this.selectedVideos.map((v, i) => {
       const status = this.videoStatuses[i] || 'pending';
       const isSkipped = status === 'skipped';
+      const retries = this.videoRetries[i] || 0;
       const showConfirm = this.isPublishing && this.skipConfirmIndex === i;
       return `<div class="queue-item${isSkipped ? ' skipped' : ''}" data-index="${i}">
         <span class="dot ${status}"></span>
         <span class="queue-name">${i+1}. ${this.escapeHtml(v.name)}</span>
+        ${retries > 0 ? `<span class="queue-retry">重试${retries}次</span>` : ''}
         ${isSkipped ? '<span class="queue-status">已跳过</span>' : ''}
         ${showConfirm ? `<span class="skip-inline">
           <button class="skip-yes" data-skip="${i}">跳过</button>
@@ -398,6 +423,10 @@ class PopupController {
     const { step, detail, current, total, videoIndex, status, done,
             platformName, totalVideos, publishStartTime, retryCount, timeoutSeconds } = msg;
     if (videoIndex !== undefined && status) this.updateQueueStatus(videoIndex, status);
+    if (videoIndex !== undefined && retryCount !== undefined) {
+      this.videoRetries[videoIndex] = retryCount;
+      this.renderQueue();
+    }
 
     if (step) {
       document.getElementById('progress-section').classList.remove('hidden');
@@ -449,6 +478,7 @@ class PopupController {
     await this.saveSettings();
     this.setPublishButtonState(true);
     this.videoStatuses = this.selectedVideos.map(() => 'pending');
+    this.videoRetries = this.selectedVideos.map(() => 0);
     this.skipConfirmIndex = -1;
     this.renderQueue();
 
@@ -562,18 +592,127 @@ class PopupController {
     pathEl.textContent = dir; mask.dataset.path = dir;
     list.innerHTML = '<div style="padding:16px;text-align:center;color:var(--text-3)">加载中...</div>';
     try {
-      const r = await fetch(`http://localhost:3000/api/directories?path=${encodeURIComponent(dir)}`);
+      const base = await this.serverBaseUrl();
+      const r = await fetch(`${base}/api/directories?path=${encodeURIComponent(dir)}`);
       const d = await r.json();
       const dirs = d.directories || [];
       let html = '';
       if (dir !== '/') {
         const parent = dir.split('/').slice(0, -1).join('/') || '/';
-        html += `<div class="dir-item up" data-path="${parent}"><span class="arrow">▴</span>返回上级</div>`;
+        html += `<div class="dir-item up" data-path="${this.escapeHtml(parent)}"><span class="arrow">▴</span>返回上级</div>`;
       }
-      html += dirs.map(dd => `<div class="dir-item" data-path="${dd.path}"><span class="arrow">▸</span>${dd.name}</div>`).join('');
+      // 目录名/路径为用户可控文本（本地目录名可含 HTML 特殊字符），必须转义
+      html += dirs.map(dd => `<div class="dir-item" data-path="${this.escapeHtml(dd.path)}"><span class="arrow">▸</span>${this.escapeHtml(dd.name)}</div>`).join('');
       list.innerHTML = html || '<div style="padding:16px;text-align:center;color:var(--text-3)">无子目录</div>';
       list.querySelectorAll('.dir-item').forEach(el => el.addEventListener('click', () => this.loadDir(mask, el.dataset.path)));
     } catch (_) { list.innerHTML = '<div style="padding:16px;text-align:center;color:var(--dot-off)">加载失败</div>'; }
+  }
+
+  // ========== 断点恢复：上次发布队列 ==========
+
+  async loadLastQueueRestore() {
+    try {
+      const data = await chrome.storage.local.get('_vpe_last_queue');
+      this.lastQueue = data['_vpe_last_queue'];
+      this.renderRestoreButton();
+    } catch (_) {}
+  }
+
+  pendingCount() {
+    if (!this.lastQueue || !Array.isArray(this.lastQueue.videos) || !this.lastQueue.videos.length) return 0;
+    return this.lastQueue.videos.filter(v => (this.lastQueue.statuses[v.name] || 'pending') !== 'success').length;
+  }
+
+  renderRestoreButton() {
+    const wrap = document.getElementById('restore-wrap');
+    if (!wrap) return;
+    const n = this.pendingCount();
+    if (n > 0) {
+      wrap.classList.remove('hidden');
+      document.getElementById('restore-btn').textContent = `恢复上次队列（${n} 个未完成）`;
+    } else {
+      wrap.classList.add('hidden');
+    }
+  }
+
+  async restoreLastQueue() {
+    if (!this.lastQueue) return;
+    const q = this.lastQueue;
+    const pendingNames = new Set(
+      q.videos.filter(v => (q.statuses[v.name] || 'pending') !== 'success').map(v => v.name)
+    );
+    if (!pendingNames.size) return;
+    if (q.videoPath) {
+      document.getElementById('video-path').value = q.videoPath;
+      this.videoPath = q.videoPath;
+      await this.loadVideos(q.videoPath);
+    }
+    // 选中未完成的视频
+    this.videos.forEach((v, i) => {
+      const cb = document.getElementById(`v-${i}`);
+      if (cb) cb.checked = pendingNames.has(v.name);
+    });
+    this.syncSelected();
+    this.lastQueue = null;
+    try { await chrome.storage.local.remove('_vpe_last_queue'); } catch (_) {}
+    this.renderRestoreButton();
+    this.updateStatus(`已恢复队列：${pendingNames.size} 个未完成视频`);
+  }
+
+  // ========== 历史页重发队列接入 ==========
+
+  startRetryQueuePolling() {
+    this.stopRetryQueuePolling();
+    this.retryQueuePollInterval = setInterval(() => this.pollRetryQueue(), 5000);
+    this.pollRetryQueue();
+  }
+
+  stopRetryQueuePolling() {
+    if (this.retryQueuePollInterval) { clearInterval(this.retryQueuePollInterval); this.retryQueuePollInterval = null; }
+  }
+
+  async pollRetryQueue() {
+    try {
+      const base = await this.serverBaseUrl();
+      const r = await fetch(`${base}/api/retry-queue`);
+      if (!r.ok) return;
+      const d = await r.json();
+      const items = d.items || [];
+      const banner = document.getElementById('retry-banner');
+      if (banner) {
+        if (items.length > 0) {
+          banner.classList.remove('hidden');
+          document.getElementById('retry-banner-count').textContent = items.length;
+        } else {
+          banner.classList.add('hidden');
+        }
+      }
+    } catch (_) {}
+  }
+
+  async applyRetryQueue() {
+    try {
+      const base = await this.serverBaseUrl();
+      const r = await fetch(`${base}/api/retry-queue`);
+      const d = await r.json();
+      const items = d.items || [];
+      if (!items.length) return;
+      const path = items[0].videoPath;
+      const names = new Set(items.map(i => i.videoName));
+      document.getElementById('video-path').value = path;
+      this.videoPath = path;
+      await this.loadVideos(path);
+      this.videos.forEach((v, i) => {
+        const cb = document.getElementById(`v-${i}`);
+        if (cb) cb.checked = names.has(v.name);
+      });
+      this.syncSelected();
+      await fetch(`${base}/api/retry-queue`, { method: 'DELETE' }).catch(() => {});
+      this.pollRetryQueue();
+      this.updateStatus(`已从历史页导入 ${names.size} 个待重发视频`);
+    } catch (e) {
+      this.updateStatus('导入重发队列失败');
+    }
   }
 }
 

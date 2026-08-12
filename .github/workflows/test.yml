@@ -1,0 +1,37 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'chrome-extension/**'
+      - 'local-server/**'
+      - 'tests/**'
+      - '.github/workflows/test.yml'
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Syntax check
+        run: |
+          node --check chrome-extension/background/background.js
+          node --check chrome-extension/content/douyin.js
+          node --check chrome-extension/content/weixin.js
+          node --check chrome-extension/popup/popup.js
+          node --check chrome-extension/shared/pure.js
+          node --check local-server/server.js
+
+      - name: Install deps
+        working-directory: local-server
+        run: npm ci
+
+      - name: Run tests
+        run: node --test tests/pure.test.js tests/server.test.js

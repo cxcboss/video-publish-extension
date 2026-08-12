@@ -11,6 +11,8 @@ AI 驱动的浏览器扩展 + 桌面管理工具，支持自动发布视频到�
 - **批量发布** — 目录自动加载，拖拽排序，队列发布
 - **星图任务** — 抖音小游戏自动关联星图任务
 - **超时重试** — 阶段感知的可靠重试（v2.9.0 重构），点击发布后自动防重复
+- **断点恢复** — 发布中断后一键恢复未完成队列（v2.10.0）
+- **失败重发** — 历史页一键把失败视频送回插件队列（v2.10.0）
 
 ## 文档
 
@@ -27,14 +29,16 @@ video-publish-extension/
 ├── chrome-extension/          # Chrome 浏览器扩展
 │   ├── manifest.json
 │   ├── popup/                 # 弹窗 UI（发布控制面板）
-│   ├── background/            # 后台服务（AI 调用、发布流程、超时重试）
+│   ├── background/            # 后台服务（AI 调用、发布流程、超时重试、状态持久化）
 │   ├── content/               # 页面自动化脚本
 │   │   ├── douyin.js          # 抖音创作者平台
 │   │   └── weixin.js          # 视频号发布平台
+│   ├── shared/                # 三端共用纯函数（含单元测试覆盖）
 │   └── icons/
 ├── local-server/              # Node.js 本地服务
-│   ├── server.js              # Express，视频文件读取 + 发布历史
+│   ├── server.js              # Express，视频文件读取 + 发布历史 + 重发队列
 │   └── package.json
+├── tests/                     # node:test 测试（纯函数 + 服务 API/安全）
 ├── mac-app/                   # Mac 原生桌面工具（Swift/SwiftUI）
 │   ├── Package.swift
 │   └── Sources/
@@ -42,7 +46,7 @@ video-publish-extension/
 │   ├── lib/main.dart
 │   └── assets/                # 打包副本（发布时同步）
 ├── docs/                      # 项目文档
-└── .github/workflows/         # CI/CD 自动构建
+└── .github/workflows/         # CI/CD（测试 + 自动构建）
 ```
 
 ## 快速开始
@@ -73,7 +77,7 @@ cd local-server && npm install && node server.js
 | 小米 MiMo | `api.xiaomimimo.com` | mimo-v2.5 |
 | OpenAI | `api.openai.com` | gpt-4o-mini |
 | Gemini | `generativelanguage.googleapis.com` | gemini-2.0-flash |
-| 豆包 | `ark.cn-beijing.volces.com` | doubao-seed-2-0-mini |
+| 豆包 | `ark.cn-beijing.volces.com` | doubao-seed-2-0-mini-260215 |
 | DeepSeek | `api.deepseek.com` | deepseek-chat |
 
 ## 文件命名规则
@@ -117,9 +121,39 @@ cd local-server && npm install && node server.js
 | GET | `/api/videos?path=` | 视频列表 |
 | GET | `/api/video/file?path=` | 视频文件（Range） |
 | GET | `/api/directories?path=` | 子目录列表 |
-| GET | `/api/publish-history` | 发布历史 |
+| GET | `/api/publish-history?limit=&offset=` | 发布历史（分页） |
 | POST | `/api/publish-record` | 新增记录 |
 | DELETE | `/api/publish-record/:id` | 删除记录 |
+| GET | `/api/retry-queue` | 重发队列 |
+| POST | `/api/retry-queue` | 加入重发队列（幂等） |
+| DELETE | `/api/retry-queue` | 清空重发队列 |
+
+### 安全说明
+
+本地服务运行在 localhost，但浏览器内任意网页都可向其发起请求。服务内置三层防护：
+
+1. **Host 校验** — 仅接受回环地址（`localhost`/`127.0.0.1`/`::1`），阻断 DNS rebinding；
+2. **Origin 白名单** — 仅放行扩展（`chrome-extension://`）、抖音/视频号创作者平台、本机页面；
+3. **Sec-Fetch-Site 校验** — 无 Origin 的跨站请求（媒体/图片标签等）一律拒绝。
+
+### 端口配置
+
+默认端口 `3000`。可通过环境变量 `PORT` 启动其他端口（`PORT=3001 node server.js`），
+并在扩展侧面板的「本地服务端口」输入框填写相同端口（保存于扩展存储，自动同步各端）。
+
+### 选择器覆盖（平台改版应急）
+
+平台改版导致自动化失效时，可向 `chrome.storage.local` 写入 `selectorOverrides` 应急，
+无需改代码。支持的覆盖项（douyin / weixin 各自为独立对象）：
+
+| 平台 | 键 | 说明 |
+|------|-----|------|
+| douyin | `uploadInputSelectors` | 上传入口选择器数组 |
+| douyin | `publishButtonTextsP1` / `publishButtonTextsP2` | 发布按钮文本（优先级 1/2） |
+| douyin | `tagInputKeywords` | 话题输入框识别关键词 |
+| douyin | `starTaskBtnTexts` | 星图任务入口按钮文本 |
+| weixin | `publishButtonTextsP1` / `publishButtonTextsP2` | 发布按钮文本 |
+| weixin | `activityItemSelectors` | 活动选项选择器数组 |
 
 ## 许可证
 

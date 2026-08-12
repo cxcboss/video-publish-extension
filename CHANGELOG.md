@@ -5,6 +5,45 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循语义化版本规范（见 [docs/RELEASING.md](docs/RELEASING.md)）。
 
+## [2.10.0] - 2026-08-13
+
+### 安全
+- 本地服务新增三层防护中间件：Host 回环校验（防 DNS rebinding）、Origin 白名单
+  （扩展/平台页/本机页面）、Sec-Fetch-Site 跨站拦截。此前任意网页可枚举并读取用户磁盘视频
+- 扩展权限裁剪：删除未使用的 `activeTab` / `scripting` / `nativeMessaging` / `webRequest`
+- 修复 popup 目录浏览器未转义导致的 HTML 注入（目录名可控）
+
+### 稳定性
+- **SW 状态持久化**：`publishState` 写入 `chrome.storage.session`，超时/下一视频定时器改用
+  `chrome.alarms`，SW 被回收后自动恢复发布状态并重建定时器，消除流程静默卡死
+- 上传等待按视频大小自适应（每 30MB +5s，上限 180s），替换原固定 8/12 秒，
+  大视频不再因等待不足而填表失败
+- 完成信号双通道统一携带 `videoIndex` 校验（残留标签页延迟跳转不再误判完成）
+- 本地服务历史记录：内存缓存 + 串行写队列（防并发覆盖丢失）、上限 5000 条、首页分页加载
+- 视频文件流错误处理 + 按扩展名映射 Content-Type
+- 发布历史写入失败不再影响发布流程（记录保存失败静默降级）
+
+### 新功能
+- **断点恢复**：发布中断后（手动停止/崩溃），popup 显示「恢复上次队列」按钮，一键恢复未完成视频
+- **失败重发**：历史页失败/结果未知记录可一键加入重发队列，popup 每 5 秒轮询并提示导入
+- 队列实时显示每个视频的重试次数徽标
+- 本地服务端口可配置（`PORT` 环境变量 + 扩展设置），默认 3000
+- 平台改版应急：`storage.local.selectorOverrides` 可覆盖关键 DOM 选择器，无需改代码
+
+### 工程质量
+- 新增 `shared/pure.js` 共享纯函数模块（命名解析/定时计算/上传等待），三端复用
+- 引入 node:test 测试（命名规则/定时计算/服务 API/安全中间件/Range 请求/分页/重发队列），
+  新增 CI test workflow（语法检查 + 测试）
+- Mac 打包版本号改为从 manifest.json 动态注入，消除 CI 硬编码漂移
+- 视频号高频日志降级为 `console.debug`，正式版默认不显示
+- 移除本地服务死代码（`/check-update`、`/update`）与 `cors` 依赖
+
+### 修复
+- `getScheduledTime` 响应为空时不再抛异常（回退到原始定时时间）
+- 视频号发布过程进度通知失效（`publishProgress` 死消息），统一为 `progressUpdate`，
+  视频号流程现在有完整进度显示
+- 死代码清理：content script 冗余的双消息发送
+
 ## [2.9.1] - 2026-08-05
 
 ### 修复
